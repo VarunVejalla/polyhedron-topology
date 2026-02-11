@@ -10,7 +10,6 @@ export function useProjectionController(
   params: ProjectorParams
 ): ProjectionControllerAPI {
   const topologyKey = useMemo(() => JSON.stringify(faces), [faces]);
-
   const projectorRef = useRef<IProjector | null>(null);
   const handlesRef = useRef<Map<number, Vec3>>(new Map());
   const baselineRef = useRef<Vec3[]>(initialVertices.map((p: Vec3) => [...p] as Vec3));
@@ -22,14 +21,7 @@ export function useProjectionController(
     projectorRef.current?.setParams?.({ rho: params.rho, wFree: params.wFree, wHandle: params.wHandle });
   }, [params]);
 
-  // If parent supplies a new set of vertices (undo/redo, commit), update baseline + reset projector.
-  useEffect(() => {
-    baselineRef.current = initialVertices.map((p: Vec3) => [...p] as Vec3);
-    projectorRef.current?.reset(baselineRef.current);
-  }, [initialVertices]);
-
-  // Recreate projector when topology or method changes.
-  // Use the latest initialVertices directly instead of from a ref.
+  // Recreate projector atomically from the latest topology/method/vertices.
   useEffect(() => {
     baselineRef.current = initialVertices.map((p: Vec3) => [...p] as Vec3);
     handlesRef.current.clear();

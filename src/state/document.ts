@@ -260,4 +260,3 @@ export function documentReducer(state: DocumentState, action: DocumentAction): D
       return state;
   }
 }
-

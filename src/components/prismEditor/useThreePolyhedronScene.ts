@@ -22,7 +22,6 @@ export function useThreePolyhedronScene(
     const mount = mountRef.current;
     if (!mount) return;
     
-    // Use initialVertices directly
     const X0 = initialVertices;
 
     // --- Scene
@@ -271,7 +270,7 @@ export function useThreePolyhedronScene(
       setApi(null);
       dispose();
     };
-  }, [topologyKey, mountRef, initialVertices.length, initialVertices]);
+  }, [topologyKey, mountRef, initialVertices]);
 
   return api;
 }

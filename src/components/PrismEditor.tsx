@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 
 import type { Vec3 } from "../engine/math/types";
 import type { ProjectorParams, ProjectionMethod } from "../engine/projection";
@@ -43,13 +43,6 @@ export function PrismEditor({ initialVertices, faces, method, params, showOverla
     onCommitVertices,
     onStatus
   );
-
-  // When the scene first becomes ready or the parent supplies new vertices, sync visuals.
-  // IMPORTANT: do not sync from baseline here; that would overwrite in-progress drags.
-  useEffect(() => {
-    if (!scene) return;
-    scene.syncSceneFromX(initialVertices);
-  }, [scene, initialVertices]);
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
