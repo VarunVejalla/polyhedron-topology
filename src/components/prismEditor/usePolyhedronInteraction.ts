@@ -159,7 +159,7 @@ export function usePolyhedronInteraction(
       if (!dragDidMove) {
         const dx = e.clientX - dragStartClientX;
         const dy = e.clientY - dragStartClientY;
-        if (dx * dx + dy * dy > 4) dragDidMove = true;
+        if (dx !== 0 || dy !== 0) dragDidMove = true;
       }
       setMouseFromEvent(e);
       raycaster.setFromCamera(mouseNDC, camera);

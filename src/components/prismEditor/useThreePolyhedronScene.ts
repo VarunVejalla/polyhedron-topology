@@ -270,7 +270,13 @@ export function useThreePolyhedronScene(
       setApi(null);
       dispose();
     };
-  }, [topologyKey, mountRef, initialVertices]);
+  }, [topologyKey, mountRef]);
+
+  // Same-topology vertex updates should not recreate the scene/camera.
+  useEffect(() => {
+    if (!api) return;
+    api.syncSceneFromX(initialVertices);
+  }, [api, initialVertices]);
 
   return api;
 }
