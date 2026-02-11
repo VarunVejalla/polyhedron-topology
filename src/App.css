@@ -1,0 +1,195 @@
+/*
+  NOTE: The React root component uses className="App".
+  Keep legacy .appRoot styles but also apply them to .App so layout doesn't collapse.
+*/
+.appRoot,
+.App {
+  height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  background: #f6f6f6;
+}
+
+/* Main two-pane layout (Graph editor + 3D viewport) */
+.mainRow {
+  display: flex;
+  min-height: 0;
+  padding: 10px;
+  gap: 0;
+}
+
+.leftPane {
+  overflow: auto;
+  background: white;
+  border: 1px solid #e6e6e6;
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.rightPane {
+  flex: 1;
+  min-width: 0;
+  background: white;
+  border: 1px solid #e6e6e6;
+  border-radius: 14px;
+  overflow: hidden;
+  position: relative;
+}
+
+.splitter {
+  width: 10px;
+  cursor: col-resize;
+  margin: 0 8px;
+  border-radius: 10px;
+  background: rgba(0,0,0,0.04);
+  border: 1px solid rgba(0,0,0,0.08);
+}
+
+.helpPanel {
+  padding: 10px 14px;
+  background: #fff;
+  border-bottom: 1px solid #e6e6e6;
+  font-size: 13px;
+  color: #222;
+}
+
+.toolbar {
+  display: flex;
+  gap: 16px;
+  padding: 12px 14px;
+  background: white;
+  border-bottom: 1px solid #e6e6e6;
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.toolbarGroup {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+}
+
+.toolbar label {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 6px;
+  color: #222;
+}
+
+.toolbar input,
+.toolbar select {
+  padding: 6px 8px;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  font-size: 13px;
+  outline: none;
+}
+
+.viewportContainer {
+  position: relative;
+  min-height: 0;
+  display: flex;
+  gap: 0;
+  padding: 10px;
+  background: #0f0f0f;
+}
+
+.leftPanel {
+  max-width: 820px;
+  overflow: auto;
+  background: #111;
+  border: 1px solid #222;
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.rightPanel {
+  flex: 1;
+  min-width: 0;
+  background: #0f0f0f;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.divider {
+  width: 10px;
+  cursor: col-resize;
+  margin: 0 8px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.10);
+}
+
+.toolbarButton {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid #ddd;
+  background: white;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.toolbarButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.toggleOn, .toggleOff {
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid #ddd;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.toggleOn {
+  background: #111;
+  color: white;
+  border-color: #111;
+}
+
+.toggleOff {
+  background: white;
+  color: #111;
+}
+
+
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 50;
+}
+
+.modalCard {
+  width: min(760px, 100%);
+  background: white;
+  border-radius: 14px;
+  border: 1px solid #e6e6e6;
+  padding: 12px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.18);
+}
+
+.modalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 4px 10px 4px;
+  border-bottom: 1px solid #eee;
+}
+
+.modalBody {
+  padding: 10px 6px 6px 6px;
+  font-size: 13px;
+  color: #222;
+}
+
+.modalBody ul {
+  margin-top: 8px;
+}
