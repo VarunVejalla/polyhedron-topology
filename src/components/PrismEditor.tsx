@@ -75,7 +75,7 @@ export function PrismEditor({ initialVertices, faces, method, params, showOverla
           </div>
           <div style={{ display: "grid", gap: 6 }}>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <span>Release:</span>
+              <span>Hard project:</span>
               <select value={releaseMode} onChange={(e) => setReleaseMode(e.target.value as "iters" | "tol")}>
                 <option value="iters">fixed iterations</option>
                 <option value="tol">until tol</option>

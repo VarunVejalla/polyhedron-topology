@@ -26,6 +26,7 @@ type ProjectionState = {
   rho: number;
   wFree: number;
   wHandle: number;
+  lambdaReg: number;
   itersPerFrame: number;
   itersOnRelease: number;
 };
@@ -144,6 +145,7 @@ export function createInitialState(): DocumentState {
       rho: 10,
       wFree: 1,
       wHandle: 1e5,
+      lambdaReg: 0,
       itersPerFrame: 10,
       itersOnRelease: 120,
     },

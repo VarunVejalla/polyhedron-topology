@@ -10,19 +10,37 @@ import type { ProjectionControllerAPI, ThreeSceneAPI } from "./types";
 export function usePolyhedronInteraction(
   scene: ThreeSceneAPI | null,
   controller: ProjectionControllerAPI,
-  releaseMode: "iters" | "tol",
-  maxReleaseIters: number,
-  tolPlanar: number,
+  hardProjectMode: "iters" | "tol",
+  hardProjectMaxIters: number,
+  hardProjectTolPlanar: number,
   setDiagnostic: (d: { totalPlanarityViolation: number }) => void,
   setHandleCount: (n: number) => void,
   onCommitVertices?: (verts: Vec3[]) => void,
   onStatus?: (s: { totalPlanarityViolation: number; handleCount: number }) => void
 ) {
   // Capture the latest values in a stable ref for event handlers
-  const stateRef = useRef({ controller, setDiagnostic, setHandleCount, onCommitVertices, onStatus, releaseMode, maxReleaseIters, tolPlanar });
+  const stateRef = useRef({
+    controller,
+    setDiagnostic,
+    setHandleCount,
+    onCommitVertices,
+    onStatus,
+    hardProjectMode,
+    hardProjectMaxIters,
+    hardProjectTolPlanar,
+  });
   
   // Update ref during render (this is safe and allowed by React)
-  stateRef.current = { controller, setDiagnostic, setHandleCount, onCommitVertices, onStatus, releaseMode, maxReleaseIters, tolPlanar };
+  stateRef.current = {
+    controller,
+    setDiagnostic,
+    setHandleCount,
+    onCommitVertices,
+    onStatus,
+    hardProjectMode,
+    hardProjectMaxIters,
+    hardProjectTolPlanar,
+  };
 
   const pushStatus = (diag: { totalPlanarityViolation: number }, handleCount: number) => {
     stateRef.current.setDiagnostic(diag);
@@ -103,9 +121,9 @@ export function usePolyhedronInteraction(
     clearAllHandlesRef.current = clearAllHandles;
 
     const hardProject = () => {
-      const { releaseMode, maxReleaseIters, tolPlanar } = stateRef.current;
-      if (releaseMode === "tol") applyProjectionUntilTol(maxReleaseIters, tolPlanar);
-      else applyProjection(maxReleaseIters);
+      const { hardProjectMode, hardProjectMaxIters, hardProjectTolPlanar } = stateRef.current;
+      if (hardProjectMode === "tol") applyProjectionUntilTol(hardProjectMaxIters, hardProjectTolPlanar);
+      else applyProjection(hardProjectMaxIters);
       commit();
     };
     hardProjectRef.current = hardProject;
@@ -189,9 +207,8 @@ export function usePolyhedronInteraction(
         return;
       }
 
-      const { releaseMode, maxReleaseIters, tolPlanar } = stateRef.current;
-      if (releaseMode === "tol") applyProjectionUntilTol(maxReleaseIters, tolPlanar);
-      else applyProjection(maxReleaseIters);
+      const c = stateRef.current.controller;
+      applyProjection(c.paramsRef.current.itersOnRelease);
 
       commit();
     };

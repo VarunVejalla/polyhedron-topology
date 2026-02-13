@@ -323,6 +323,15 @@ export default function App() {
               style={{ width: 110, marginLeft: 8 }}
             />
           </label>
+          <label style={{ marginLeft: 12 }}>
+            lambdaReg
+            <input
+              type="number"
+              value={doc.projection.lambdaReg}
+              onChange={(e) => dispatch({ type: "SET_PROJECTION", patch: { lambdaReg: Number(e.target.value) } })}
+              style={{ width: 100, marginLeft: 8 }}
+            />
+          </label>
         </div>
 
         <div className="toolbarGroup">
@@ -411,6 +420,7 @@ export default function App() {
                 rho: doc.projection.rho,
                 wFree: doc.projection.wFree,
                 wHandle: doc.projection.wHandle,
+                lambdaReg: doc.projection.lambdaReg,
                 itersPerFrame: doc.projection.itersPerFrame,
                 itersOnRelease: doc.projection.itersOnRelease,
               }}

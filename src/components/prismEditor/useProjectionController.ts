@@ -18,7 +18,12 @@ export function useProjectionController(
   // Hot-path reads params from a ref.
   useEffect(() => {
     paramsRef.current = params;
-    projectorRef.current?.setParams?.({ rho: params.rho, wFree: params.wFree, wHandle: params.wHandle });
+    projectorRef.current?.setParams?.({
+      rho: params.rho,
+      wFree: params.wFree,
+      wHandle: params.wHandle,
+      lambdaReg: params.lambdaReg,
+    });
   }, [params]);
 
   // Recreate projector atomically from the latest topology/method/vertices.
