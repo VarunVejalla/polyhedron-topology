@@ -3,14 +3,24 @@ import { ADMMPlanarProjector, ADMMParams } from "./planarAdmm";
 import { ADMMConvexPlanarProjector, ADMMConvexParams } from "./planarAdmmConvex";
 import { ADMMRegularPlanarProjector, ADMMRegularParams } from "./planarAdmmRegular";
 import { GuidedALMPlanarProjector, GuidedALMParams } from "./planarGuidedAlm";
+import { GuidedALMSquaredSlackPlanarProjector, GuidedALMSquaredSlackParams } from "./planarGuidedAlmSquaredSlack";
+import { ModularPlanarProjector, ModularProjectorParams } from "./planarModular";
 
-export type ProjectionMethod = "admm" | "admm_convex" | "admm_regular" | "guided_alm";
+export type ProjectionMethod =
+  | "admm"
+  | "admm_convex"
+  | "admm_regular"
+  | "guided_alm"
+  | "guided_alm_squared_slack"
+  | "guided_alm_modular";
 
 export const projectionMethods: { id: ProjectionMethod; label: string }[] = [
   { id: "admm", label: "ADMM / prox (planar faces)" },
   { id: "admm_convex", label: "ADMM / prox (planar + convex)" },
   { id: "admm_regular", label: "ADMM / prox (planar + face regularity)" },
   { id: "guided_alm", label: "Guided projection + ALM/GN (linearized constraints)" },
+  { id: "guided_alm_squared_slack", label: "Guided projection + ALM (plane vars + squared slacks)" },
+  { id: "guided_alm_modular", label: "Guided projection + ALM (modular framework)" },
 ];
 
 export type HandleSet = {
@@ -35,7 +45,15 @@ export interface IProjector {
   snapshotPositions(): Vec3[];
   diagnostics(): { totalPlanarityViolation: number };
   // optional runtime param updates
-  setParams?(next: ADMMParams | ADMMConvexParams | ADMMRegularParams | GuidedALMParams): void;
+  setParams?(
+    next:
+      | ADMMParams
+      | ADMMConvexParams
+      | ADMMRegularParams
+      | GuidedALMParams
+      | GuidedALMSquaredSlackParams
+      | ModularProjectorParams
+  ): void;
 }
 
 export function createProjector(method: ProjectionMethod, faces: number[][], x0: Vec3[], params: ProjectorParams): IProjector {
@@ -56,6 +74,24 @@ export function createProjector(method: ProjectionMethod, faces: number[][], x0:
       lambdaReg: params.lambdaReg,
     };
     return new GuidedALMPlanarProjector(faces, x0, p);
+  }
+  if (method === "guided_alm_squared_slack") {
+    const p: GuidedALMSquaredSlackParams = {
+      rho: params.rho,
+      wFree: params.wFree,
+      wHandle: params.wHandle,
+      lambdaReg: params.lambdaReg,
+    };
+    return new GuidedALMSquaredSlackPlanarProjector(faces, x0, p);
+  }
+  if (method === "guided_alm_modular") {
+    const p: ModularProjectorParams = {
+      rho: params.rho,
+      wFree: params.wFree,
+      wHandle: params.wHandle,
+      lambdaReg: params.lambdaReg,
+    };
+    return new ModularPlanarProjector(faces, x0, p);
   }
   if (method === "admm_convex") {
     const p: ADMMConvexParams = { rho: params.rho, wFree: params.wFree, wHandle: params.wHandle };
