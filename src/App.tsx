@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState, useReducer } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import "./App.css";
 
-import { PrismEditor } from "./components/PrismEditor";
+import { PrismEditor, type PrismEditorHandle } from "./components/PrismEditor";
 import { GraphEditor } from "./components/GraphEditor";
 
 import { projectionMethods, type ProjectionMethod } from "./engine/projection";
@@ -10,7 +10,7 @@ import { buildCanonicalPolyhedron } from "./engine/canonical/canonicalPolyhedron
 import { presetNames } from "./graph/presets";
 import type { NodeId } from "./graph/types";
 import { checkPolyhedral } from "./graph/validity";
-import { facesFromEmbedding, planarDualFromFaces, type Face, chooseOuterFace } from "./graph/embedding";
+import { chooseOuterFace, facesFromEmbedding, planarDualFromFaces, type Face } from "./graph/embedding";
 import { tutteLayout } from "./graph/layout";
 
 import { createInitialState, documentReducer, GRAPH_VIEW } from "./state/document";
@@ -20,18 +20,19 @@ export default function App() {
   const [state, dispatch] = useReducer(documentReducer, undefined, () => createInitialState());
   const doc = state.present;
 
-  // ---- local-only UI state
-  const [showHelp, setShowHelp] = useState(false);
-
-  // ---- Status from 3D editor
   const [planarity, setPlanarity] = useState(0);
   const [handleCount, setHandleCount] = useState(0);
+  const [isComputing, setIsComputing] = useState(false);
+  const prismRef = useRef<PrismEditorHandle | null>(null);
 
   const undo = () => dispatch({ type: "UNDO" });
   const redo = () => dispatch({ type: "REDO" });
 
-  // Split-pane dragging (UI-only; should not affect history)
-  const splitDragRef = useRef<{ dragging: boolean; startX: number; startW: number }>({ dragging: false, startX: 0, startW: 0 });
+  const splitDragRef = useRef<{ dragging: boolean; startX: number; startW: number }>({
+    dragging: false,
+    startX: 0,
+    startW: 0,
+  });
 
   useEffect(() => {
     const onMove = (e: PointerEvent) => {
@@ -51,7 +52,6 @@ export default function App() {
     };
   }, []);
 
-  // Keyboard shortcuts: undo/redo
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const isMod = e.metaKey || e.ctrlKey;
@@ -87,21 +87,18 @@ export default function App() {
     return { x: sx / cnt, y: sy / cnt };
   };
 
-
   const buildPolyFromVertexGraph = () => {
     const rep = checkPolyhedral(doc.vertexGraph);
     if (!rep.ok) {
-      alert("Vertex graph is not a valid polyhedral graph (planar + 3-connected, ≥4 nodes).");
+      alert("Vertex graph is not a valid polyhedral graph (planar + 3-connected, >= 4 nodes).");
       return;
     }
 
-    // Derive a canonical outer face from the combinatorial planarity embedding,
-    // then run Tutte using that facial cycle. This avoids fragile preset/guess outer cycles.
     let faces0: Face[];
     try {
       faces0 = facesFromEmbedding(doc.vertexGraph.nodes.map((n) => n.id), doc.vertexGraph.edges, rep.embedding);
-    } catch (e: any) {
-      alert(`Face extraction from the planarity embedding failed: ${String(e?.message ?? e)}`);
+    } catch (e: unknown) {
+      alert(`Face extraction from the planarity embedding failed: ${String(e)}`);
       return;
     }
 
@@ -116,10 +113,9 @@ export default function App() {
       const p = pos.get(n.id);
       return p ? { ...n, x: p.x, y: p.y } : n;
     });
-    
+
     const embGraph = { nodes: nodes2, edges: doc.vertexGraph.edges.map((e) => ({ ...e })) };
 
-    // Sync dual (overwrite face graph) from the SAME faces used for building.
     const dual = planarDualFromFaces(faces0);
     const centroids = new Map<string, { x: number; y: number }>();
     for (const f of faces0) centroids.set(f.id, centroidOfCycle(embGraph, f.cycle));
@@ -148,23 +144,19 @@ export default function App() {
   const buildPolyFromFaceGraph = () => {
     const rep = checkPolyhedral(doc.faceGraph);
     if (!rep.ok) {
-      alert("Face graph is not a valid polyhedral graph (planar + 3-connected, ≥4 nodes).");
+      alert("Face graph is not a valid polyhedral graph (planar + 3-connected, >= 4 nodes).");
       return;
     }
 
     let primalFaces: Face[];
     try {
       primalFaces = facesFromEmbedding(doc.faceGraph.nodes.map((n) => n.id), doc.faceGraph.edges, rep.embedding);
-    } catch (e: any) {
-      alert(`Face extraction from the planarity embedding failed: ${String(e?.message ?? e)}`);
+    } catch (e: unknown) {
+      alert(`Face extraction from the planarity embedding failed: ${String(e)}`);
       return;
     }
 
-    // Build dual = vertex graph.
     const dual = planarDualFromFaces(primalFaces);
-
-    // Give the dual (vertex graph) a canonical planar drawing for stable initialization.
-    // We intentionally compute the outer face from the dual's combinatorial embedding.
     const repDual = checkPolyhedral(dual);
     if (!repDual.ok) {
       alert("Internal error: computed dual graph did not validate as polyhedral.");
@@ -174,8 +166,8 @@ export default function App() {
     let dualFaces0: Face[];
     try {
       dualFaces0 = facesFromEmbedding(dual.nodes.map((n) => n.id), dual.edges, repDual.embedding);
-    } catch (e: any) {
-      alert(`Dual face extraction from the planarity embedding failed: ${String(e?.message ?? e)}`);
+    } catch (e: unknown) {
+      alert(`Dual face extraction from the planarity embedding failed: ${String(e)}`);
       return;
     }
 
@@ -192,8 +184,6 @@ export default function App() {
     });
     const embDualGraph = { nodes: nodesDual2, edges: dual.edges.map((e) => ({ ...e })) };
 
-    // Build face cycles for the dual (vertex graph) by reading, for each primal vertex u,
-    // the cyclic list of incident faces to the left of each dart u->v.
     const dirEdgeToFace = new Map<string, string>();
     for (const f of primalFaces) {
       const cyc = f.cycle;
@@ -213,7 +203,6 @@ export default function App() {
         const fid = dirEdgeToFace.get(`${u}__${v}`);
         if (fid) cyc.push(fid);
       }
-      // Defensive filter: drop empty/degenerate faces.
       if (cyc.length >= 3) facesForDual.push({ id: u, cycle: cyc });
     }
 
@@ -233,13 +222,23 @@ export default function App() {
     });
   };
 
+  const toggleViewFlag = (key: "showGraphs" | "show3D" | "showAxes" | "showVertexPositions") => {
+    dispatch({ type: "SET_UI", patch: { [key]: !doc.ui[key] } });
+  };
+
+  const runAbortAndRevert = () => {
+    prismRef.current?.abortComputation();
+    prismRef.current?.revertToBaseline();
+    if (state.past.length > 0) undo();
+  };
+
   return (
     <div className="App">
       <div className="toolbar">
-        <div className="toolbarGroup">
-          <label>
+        <div className="toolbarSection">
+          <label className="toolbarField">
             Preset
-            <select value={doc.preset} onChange={(e) => applyPreset(e.target.value)} style={{ marginLeft: 8 }}>
+            <select value={doc.preset} onChange={(e) => applyPreset(e.target.value)}>
               {presetList.map((p) => (
                 <option key={p} value={p}>
                   {p}
@@ -247,139 +246,180 @@ export default function App() {
               ))}
             </select>
           </label>
-          <button
-            className="toolbarButton"
-            onClick={buildPolyFromFaceGraph}
-            style={{ marginLeft: 12 }}
-            title="Validate face graph (planar + 3-connected), sync the dual vertex graph, and build the canonical polyhedron"
-          >
-            Build from face graph
+          <button className="uiButton uiButtonPrimary" onClick={buildPolyFromVertexGraph} title="Validate vertex graph, sync dual face graph, and build canonical polyhedron">
+            Build from vertex
           </button>
-          <button
-            className="toolbarButton"
-            onClick={buildPolyFromVertexGraph}
-            title="Validate vertex graph (planar + 3-connected), sync the dual face graph, and build the canonical polyhedron"
-          >
-            Build from vertex graph
+          <button className="uiButton uiButtonPrimary" onClick={buildPolyFromFaceGraph} title="Validate face graph, sync dual vertex graph, and build canonical polyhedron">
+            Build from face
           </button>
         </div>
 
-        <div className="toolbarGroup">
-          <button className="toolbarButton" onClick={undo} disabled={state.past.length === 0} title="Undo (Ctrl/Cmd+Z)">
+        <div className="toolbarSection">
+          <button className="uiButton" onClick={undo} disabled={state.past.length === 0} title="Undo (Ctrl/Cmd+Z)">
             Undo
           </button>
-          <button className="toolbarButton" onClick={redo} disabled={state.future.length === 0} title="Redo (Ctrl/Cmd+Y or Ctrl/Cmd+Shift+Z)">
+          <button className="uiButton" onClick={redo} disabled={state.future.length === 0} title="Redo (Ctrl/Cmd+Y or Ctrl/Cmd+Shift+Z)">
             Redo
           </button>
-        </div>
-
-        <div className="toolbarGroup">
-          <label>
-            Method
-            <select
-              value={doc.projection.method}
-              onChange={(e) =>
-                dispatch({
-                  type: "SET_PROJECTION",
-                  patch: { method: e.target.value as ProjectionMethod },
-                })
-              }
-              style={{ marginLeft: 8 }}
-            >
-              {projectionMethods.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-
-        <div className="toolbarGroup">
-          <label>
-            ρ
-            <input
-              type="number"
-              value={doc.projection.rho}
-              onChange={(e) => dispatch({ type: "SET_PROJECTION", patch: { rho: Number(e.target.value) } })}
-              style={{ width: 80, marginLeft: 8 }}
-            />
-          </label>
-          <label style={{ marginLeft: 12 }}>
-            wFree
-            <input
-              type="number"
-              value={doc.projection.wFree}
-              onChange={(e) => dispatch({ type: "SET_PROJECTION", patch: { wFree: Number(e.target.value) } })}
-              style={{ width: 80, marginLeft: 8 }}
-            />
-          </label>
-          <label style={{ marginLeft: 12 }}>
-            wHandle
-            <input
-              type="number"
-              value={doc.projection.wHandle}
-              onChange={(e) => dispatch({ type: "SET_PROJECTION", patch: { wHandle: Number(e.target.value) } })}
-              style={{ width: 110, marginLeft: 8 }}
-            />
-          </label>
-          <label style={{ marginLeft: 12 }}>
-            lambdaReg
-            <input
-              type="number"
-              value={doc.projection.lambdaReg}
-              onChange={(e) => dispatch({ type: "SET_PROJECTION", patch: { lambdaReg: Number(e.target.value) } })}
-              style={{ width: 100, marginLeft: 8 }}
-            />
-          </label>
-        </div>
-
-        <div className="toolbarGroup">
-          <label>
-            iters/frame
-            <input
-              type="number"
-              value={doc.projection.itersPerFrame}
-              onChange={(e) => dispatch({ type: "SET_PROJECTION", patch: { itersPerFrame: Number(e.target.value) } })}
-              style={{ width: 80, marginLeft: 8 }}
-            />
-          </label>
-          <label style={{ marginLeft: 12 }}>
-            iters/release
-            <input
-              type="number"
-              value={doc.projection.itersOnRelease}
-              onChange={(e) => dispatch({ type: "SET_PROJECTION", patch: { itersOnRelease: Number(e.target.value) } })}
-              style={{ width: 90, marginLeft: 8 }}
-            />
-          </label>
-        </div>
-
-        <div className="toolbarGroup" style={{ marginLeft: "auto" }}>
-          <button className="toolbarButton" onClick={() => setShowHelp((s) => !s)}>
-            {showHelp ? "Hide help" : "Help"}
+          <button className="uiButton uiButtonDanger" onClick={runAbortAndRevert} disabled={!isComputing && state.past.length === 0}>
+            Abort + Revert
           </button>
-          <label style={{ marginLeft: 10 }}>
-            <input type="checkbox" checked={doc.ui.showOverlay} onChange={(e) => dispatch({ type: "SET_UI", patch: { showOverlay: e.target.checked } })} />
-            Overlay
-          </label>
-          <label style={{ marginLeft: 10 }}>
-            <input type="checkbox" checked={doc.ui.showGraphs} onChange={(e) => dispatch({ type: "SET_UI", patch: { showGraphs: e.target.checked } })} />
+        </div>
+
+        <div className="toolbarSection">
+          <button className={`uiButton ${doc.ui.showGraphs ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showGraphs")}>
             Graphs
-          </label>
-          <label style={{ marginLeft: 10 }}>
-            <input type="checkbox" checked={doc.ui.show3D} onChange={(e) => dispatch({ type: "SET_UI", patch: { show3D: e.target.checked } })} />
+          </button>
+          <button className={`uiButton ${doc.ui.show3D ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("show3D")}>
             3D
-          </label>
+          </button>
+          <button className={`uiButton ${doc.ui.showAxes ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showAxes")} disabled={!doc.ui.show3D}>
+            Axes
+          </button>
+          <button className={`uiButton ${doc.ui.showVertexPositions ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showVertexPositions")} disabled={!doc.ui.show3D}>
+            Vertex positions
+          </button>
+        </div>
+
+        <div className="toolbarSection">
+          <button className="uiButton" onClick={() => prismRef.current?.hardProject()} disabled={!doc.ui.show3D || isComputing}>
+            Hard project
+          </button>
+          <button className="uiButton" onClick={() => prismRef.current?.clearAllHandles()} disabled={!doc.ui.show3D || isComputing}>
+            Clear handles
+          </button>
+          <button className="uiButton" onClick={() => prismRef.current?.zoomIn()} disabled={!doc.ui.show3D}>
+            +
+          </button>
+          <button className="uiButton" onClick={() => prismRef.current?.zoomOut()} disabled={!doc.ui.show3D}>
+            -
+          </button>
+          <button className="uiButton" onClick={() => prismRef.current?.resetView()} disabled={!doc.ui.show3D}>
+            Reset view
+          </button>
+        </div>
+
+        <div className="toolbarSection toolbarSectionRight">
+          <div className="statusPill">Planarity: {planarity.toExponential(2)}</div>
+          <div className="statusPill">Handles: {handleCount}</div>
+          <div className={`statusPill ${isComputing ? "statusBusy" : ""}`}>{isComputing ? "Running" : "Idle"}</div>
+          <button
+            className="uiButton"
+            onClick={() => dispatch({ type: "SET_UI", patch: { showAdvancedSettings: !doc.ui.showAdvancedSettings } })}
+            aria-expanded={doc.ui.showAdvancedSettings}
+          >
+            {doc.ui.showAdvancedSettings ? "Hide settings" : "Settings"}
+          </button>
         </div>
       </div>
 
-      {showHelp && (
-        <div className="helpPanel">
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-            <div>Planarity (total): {planarity.toExponential(2)}</div>
-            <div>Handles: {handleCount}</div>
-            <div style={{ opacity: 0.8 }}>Graph edits do not affect the polyhedron until you click “Build polyhedron (canonical)”.</div>
+      {doc.ui.showAdvancedSettings && (
+        <div className="settingsPanel">
+          <div className="settingsGrid">
+            <label className="toolbarField">
+              Method
+              <select
+                value={doc.projection.method}
+                onChange={(e) =>
+                  dispatch({
+                    type: "SET_PROJECTION",
+                    patch: { method: e.target.value as ProjectionMethod },
+                  })
+                }
+              >
+                {projectionMethods.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="toolbarField">
+              rho
+              <input type="number" value={doc.projection.rho} onChange={(e) => dispatch({ type: "SET_PROJECTION", patch: { rho: Number(e.target.value) } })} />
+            </label>
+
+            <label className="toolbarField">
+              wFree
+              <input type="number" value={doc.projection.wFree} onChange={(e) => dispatch({ type: "SET_PROJECTION", patch: { wFree: Number(e.target.value) } })} />
+            </label>
+
+            <label className="toolbarField">
+              wHandle
+              <input type="number" value={doc.projection.wHandle} onChange={(e) => dispatch({ type: "SET_PROJECTION", patch: { wHandle: Number(e.target.value) } })} />
+            </label>
+
+            <label className="toolbarField">
+              lambdaReg
+              <input type="number" value={doc.projection.lambdaReg} onChange={(e) => dispatch({ type: "SET_PROJECTION", patch: { lambdaReg: Number(e.target.value) } })} />
+            </label>
+
+            <label className="toolbarField">
+              iters/frame
+              <input
+                type="number"
+                value={doc.projection.itersPerFrame}
+                onChange={(e) => dispatch({ type: "SET_PROJECTION", patch: { itersPerFrame: Number(e.target.value) } })}
+              />
+            </label>
+
+            <label className="toolbarField">
+              iters/release
+              <input
+                type="number"
+                value={doc.projection.itersOnRelease}
+                onChange={(e) => dispatch({ type: "SET_PROJECTION", patch: { itersOnRelease: Number(e.target.value) } })}
+              />
+            </label>
+
+            <label className="toolbarField">
+              hard project mode
+              <select
+                value={doc.projection.hardProjectMode}
+                onChange={(e) =>
+                  dispatch({
+                    type: "SET_PROJECTION",
+                    patch: { hardProjectMode: e.target.value as "iters" | "tol" },
+                  })
+                }
+              >
+                <option value="iters">fixed iterations</option>
+                <option value="tol">until tolerance</option>
+              </select>
+            </label>
+
+            <label className="toolbarField">
+              hard project max iters
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={doc.projection.hardProjectMaxIters}
+                onChange={(e) =>
+                  dispatch({
+                    type: "SET_PROJECTION",
+                    patch: { hardProjectMaxIters: Math.max(1, Number(e.target.value)) },
+                  })
+                }
+              />
+            </label>
+
+            <label className="toolbarField">
+              hard project tolerance
+              <input
+                type="number"
+                min={0}
+                step="any"
+                value={doc.projection.hardProjectTolPlanar}
+                onChange={(e) =>
+                  dispatch({
+                    type: "SET_PROJECTION",
+                    patch: { hardProjectTolPlanar: Math.max(0, Number(e.target.value)) },
+                  })
+                }
+              />
+            </label>
           </div>
         </div>
       )}
@@ -413,6 +453,7 @@ export default function App() {
         {doc.ui.show3D && (
           <div className="rightPane">
             <PrismEditor
+              ref={prismRef}
               initialVertices={doc.poly.vertices}
               faces={doc.poly.faces}
               method={doc.projection.method}
@@ -424,13 +465,47 @@ export default function App() {
                 itersPerFrame: doc.projection.itersPerFrame,
                 itersOnRelease: doc.projection.itersOnRelease,
               }}
-              showOverlay={doc.ui.showOverlay}
+              hardProject={{
+                mode: doc.projection.hardProjectMode,
+                maxIters: doc.projection.hardProjectMaxIters,
+                tolPlanar: doc.projection.hardProjectTolPlanar,
+              }}
+              showAxes={doc.ui.showAxes}
               onCommitVertices={(verts) => dispatch({ type: "COMMIT_POLY_VERTICES", vertices: verts })}
               onStatus={(s) => {
                 setPlanarity(s.totalPlanarityViolation);
                 setHandleCount(s.handleCount);
               }}
+              onRunningChange={setIsComputing}
             />
+
+            {doc.ui.showVertexPositions && (
+              <div className="vertexPanel">
+                <div className="vertexPanelTitle">Vertex positions</div>
+                <div className="vertexPanelTableWrap">
+                  <table className="vertexTable">
+                    <thead>
+                      <tr>
+                        <th>i</th>
+                        <th>x</th>
+                        <th>y</th>
+                        <th>z</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {doc.poly.vertices.map((v, i) => (
+                        <tr key={i}>
+                          <td>{i}</td>
+                          <td>{v[0].toFixed(4)}</td>
+                          <td>{v[1].toFixed(4)}</td>
+                          <td>{v[2].toFixed(4)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

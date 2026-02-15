@@ -4,8 +4,8 @@ import type { Vec3 } from "../../engine/math/types";
 import type { ProjectionControllerAPI, ThreeSceneAPI } from "./types";
 
 /**
- * Owns all pointer + keyboard interaction. Critical property:
- * event listeners must remain stable during drag (no bind/unbind on React rerenders).
+ * Owns all pointer interaction and long-running projection actions.
+ * Event listeners remain stable during drag.
  */
 export function usePolyhedronInteraction(
   scene: ThreeSceneAPI | null,
@@ -13,42 +13,49 @@ export function usePolyhedronInteraction(
   hardProjectMode: "iters" | "tol",
   hardProjectMaxIters: number,
   hardProjectTolPlanar: number,
-  setDiagnostic: (d: { totalPlanarityViolation: number }) => void,
-  setHandleCount: (n: number) => void,
   onCommitVertices?: (verts: Vec3[]) => void,
-  onStatus?: (s: { totalPlanarityViolation: number; handleCount: number }) => void
+  onStatus?: (s: { totalPlanarityViolation: number; handleCount: number }) => void,
+  onRunningChange?: (running: boolean) => void
 ) {
-  // Capture the latest values in a stable ref for event handlers
   const stateRef = useRef({
     controller,
-    setDiagnostic,
-    setHandleCount,
     onCommitVertices,
     onStatus,
+    onRunningChange,
     hardProjectMode,
     hardProjectMaxIters,
     hardProjectTolPlanar,
   });
-  
-  // Update ref during render (this is safe and allowed by React)
-  stateRef.current = {
-    controller,
-    setDiagnostic,
-    setHandleCount,
-    onCommitVertices,
-    onStatus,
-    hardProjectMode,
-    hardProjectMaxIters,
-    hardProjectTolPlanar,
-  };
 
-  const pushStatus = (diag: { totalPlanarityViolation: number }, handleCount: number) => {
-    stateRef.current.setDiagnostic(diag);
-    stateRef.current.onStatus?.({ totalPlanarityViolation: diag.totalPlanarityViolation, handleCount });
-  };
+  useEffect(() => {
+    stateRef.current = {
+      controller,
+      onCommitVertices,
+      onStatus,
+      onRunningChange,
+      hardProjectMode,
+      hardProjectMaxIters,
+      hardProjectTolPlanar,
+    };
+  }, [controller, onCommitVertices, onStatus, onRunningChange, hardProjectMode, hardProjectMaxIters, hardProjectTolPlanar]);
+
+  const runningRef = useRef(false);
+  const abortRequestedRef = useRef(false);
 
   const hardProjectRef = useRef<() => void>(() => {});
   const clearAllHandlesRef = useRef<() => void>(() => {});
+  const abortComputationRef = useRef<() => void>(() => {});
+  const revertToBaselineRef = useRef<() => void>(() => {});
+
+  const setRunning = (running: boolean) => {
+    if (runningRef.current === running) return;
+    runningRef.current = running;
+    stateRef.current.onRunningChange?.(running);
+  };
+
+  const pushStatus = (diag: { totalPlanarityViolation: number }, handleCount: number) => {
+    stateRef.current.onStatus?.({ totalPlanarityViolation: diag.totalPlanarityViolation, handleCount });
+  };
 
   useEffect(() => {
     if (!scene) return;
@@ -65,10 +72,112 @@ export function usePolyhedronInteraction(
       updateSpheresMaterial,
     } = scene;
 
+    let runTimer: number | null = null;
+    let disposed = false;
+
+    const cancelRunTimer = () => {
+      if (runTimer !== null) {
+        window.clearTimeout(runTimer);
+        runTimer = null;
+      }
+    };
+
+    const syncFromController = () => {
+      const c = stateRef.current.controller;
+      syncSceneFromX(c.getXRef());
+      updateSpheresMaterial(c.handlesRef.current);
+      pushStatus(c.diagnostics(), c.getHandleCount());
+    };
+
+    const applyProjection = (iters: number) => {
+      const c = stateRef.current.controller;
+      c.step(iters);
+      syncFromController();
+    };
+
+    const commit = () => {
+      const c = stateRef.current.controller;
+      const snap = c.snapshot();
+      c.commitBaseline(snap);
+      stateRef.current.onCommitVertices?.(snap);
+      syncFromController();
+    };
+
+    const clearAllHandles = () => {
+      const c = stateRef.current.controller;
+      c.clearAllHandles();
+      syncFromController();
+    };
+    clearAllHandlesRef.current = clearAllHandles;
+
+    const revertToBaseline = () => {
+      const c = stateRef.current.controller;
+      const baseline = c.baselineRef.current.map((p) => [...p] as Vec3);
+      c.projectorRef.current?.reset(baseline);
+      c.clearAllHandles();
+      syncFromController();
+    };
+    revertToBaselineRef.current = revertToBaseline;
+
+    const abortComputation = () => {
+      if (!runningRef.current) return;
+      abortRequestedRef.current = true;
+    };
+    abortComputationRef.current = abortComputation;
+
+    const hardProject = () => {
+      if (runningRef.current) return;
+      setRunning(true);
+      abortRequestedRef.current = false;
+
+      const maxIters = Math.max(1, Math.floor(stateRef.current.hardProjectMaxIters));
+      const tol = Math.max(0, stateRef.current.hardProjectTolPlanar);
+      const mode = stateRef.current.hardProjectMode;
+      let it = 0;
+
+      const stepBatch = () => {
+        if (disposed) return;
+
+        if (abortRequestedRef.current) {
+          abortRequestedRef.current = false;
+          cancelRunTimer();
+          setRunning(false);
+          revertToBaseline();
+          return;
+        }
+
+        const remaining = maxIters - it;
+        if (remaining <= 0) {
+          cancelRunTimer();
+          commit();
+          setRunning(false);
+          return;
+        }
+
+        const batch = Math.min(8, remaining);
+        applyProjection(batch);
+        it += batch;
+
+        if (mode === "tol") {
+          const c = stateRef.current.controller;
+          if (c.diagnostics().totalPlanarityViolation <= tol) {
+            cancelRunTimer();
+            commit();
+            setRunning(false);
+            return;
+          }
+        }
+
+        runTimer = window.setTimeout(stepBatch, 0);
+      };
+
+      stepBatch();
+    };
+    hardProjectRef.current = hardProject;
+
     const onContextMenu = (e: MouseEvent) => e.preventDefault();
     renderer.domElement.addEventListener("contextmenu", onContextMenu);
 
-    // Drag state
     let dragging = false;
     let dragVertex: number | null = null;
     let dragStartClientX = 0;
@@ -79,75 +188,22 @@ export function usePolyhedronInteraction(
     const dragPlane = new THREE.Plane();
     const dragHit = new THREE.Vector3();
 
-    const applyProjection = (iters: number) => {
-      const c = stateRef.current.controller;
-      c.step(iters);
-      const X = c.getXRef();
-      syncSceneFromX(X);
-      const hc = c.getHandleCount();
-      stateRef.current.setHandleCount(hc);
-      pushStatus(c.diagnostics(), hc);
-    };
-
-    const applyProjectionUntilTol = (maxIters: number, tol: number) => {
-      const c = stateRef.current.controller;
-      c.stepUntilTol(maxIters, tol);
-      const X = c.getXRef();
-      syncSceneFromX(X);
-      const hc = c.getHandleCount();
-      stateRef.current.setHandleCount(hc);
-      pushStatus(c.diagnostics(), hc);
-    };
-
-    const commit = () => {
-      const c = stateRef.current.controller;
-      const snap = c.snapshot();
-      c.commitBaseline(snap);
-      stateRef.current.onCommitVertices?.(snap);
-
-      const hc = c.getHandleCount();
-      stateRef.current.setHandleCount(hc);
-      pushStatus(c.diagnostics(), hc);
-    };
-
-    const clearAllHandles = () => {
-      const c = stateRef.current.controller;
-      c.clearAllHandles();
-      updateSpheresMaterial(c.handlesRef.current);
-      const hc = c.getHandleCount();
-      stateRef.current.setHandleCount(hc);
-      pushStatus(c.diagnostics(), hc);
-    };
-    clearAllHandlesRef.current = clearAllHandles;
-
-    const hardProject = () => {
-      const { hardProjectMode, hardProjectMaxIters, hardProjectTolPlanar } = stateRef.current;
-      if (hardProjectMode === "tol") applyProjectionUntilTol(hardProjectMaxIters, hardProjectTolPlanar);
-      else applyProjection(hardProjectMaxIters);
-      commit();
-    };
-    hardProjectRef.current = hardProject;
-
     const onPointerDown = (e: PointerEvent) => {
+      if (runningRef.current) return;
       if (e.button === 2) e.preventDefault();
 
       setMouseFromEvent(e);
       raycaster.setFromCamera(mouseNDC, camera);
 
       const hits = raycaster.intersectObjects(vMeshes, false);
-      if (hits.length === 0) {
-        return;
-      }
+      if (hits.length === 0) return;
 
       const obj = hits[0].object as THREE.Mesh;
       const vid = obj.userData.vertexIndex as number;
-
       const c = stateRef.current.controller;
 
-      // Right click clears handle
       if (e.button === 2) {
         c.clearHandle(vid);
-        updateSpheresMaterial(c.handlesRef.current);
         applyProjection(c.paramsRef.current.itersPerFrame);
         return;
       }
@@ -162,13 +218,11 @@ export function usePolyhedronInteraction(
 
       const camDir = new THREE.Vector3();
       camera.getWorldDirection(camDir);
-
       dragPlane.setFromNormalAndCoplanarPoint(camDir, obj.position);
 
       if (!dragWasHandle) {
         c.setHandle(vid, [obj.position.x, obj.position.y, obj.position.z]);
-        updateSpheresMaterial(c.handlesRef.current);
-        stateRef.current.setHandleCount(c.getHandleCount());
+        syncFromController();
       }
     };
 
@@ -179,14 +233,13 @@ export function usePolyhedronInteraction(
         const dy = e.clientY - dragStartClientY;
         if (dx !== 0 || dy !== 0) dragDidMove = true;
       }
+
       setMouseFromEvent(e);
       raycaster.setFromCamera(mouseNDC, camera);
       if (!raycaster.ray.intersectPlane(dragPlane, dragHit)) return;
 
       const c = stateRef.current.controller;
       c.setHandle(dragVertex, [dragHit.x, dragHit.y, dragHit.z]);
-
-      updateSpheresMaterial(c.handlesRef.current);
       applyProjection(c.paramsRef.current.itersPerFrame);
     };
 
@@ -200,16 +253,12 @@ export function usePolyhedronInteraction(
       if (!dragDidMove && releasedVertex !== null) {
         const c = stateRef.current.controller;
         if (dragWasHandle) c.clearHandle(releasedVertex);
-        updateSpheresMaterial(c.handlesRef.current);
-        const hc = c.getHandleCount();
-        stateRef.current.setHandleCount(hc);
-        pushStatus(c.diagnostics(), hc);
+        syncFromController();
         return;
       }
 
       const c = stateRef.current.controller;
       applyProjection(c.paramsRef.current.itersOnRelease);
-
       commit();
     };
 
@@ -217,7 +266,12 @@ export function usePolyhedronInteraction(
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerUp);
 
+    syncFromController();
+
     return () => {
+      disposed = true;
+      cancelRunTimer();
+      setRunning(false);
       renderer.domElement.removeEventListener("contextmenu", onContextMenu);
       renderer.domElement.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("pointermove", onPointerMove);
@@ -228,5 +282,8 @@ export function usePolyhedronInteraction(
   return {
     hardProject: () => hardProjectRef.current(),
     clearAllHandles: () => clearAllHandlesRef.current(),
+    abortComputation: () => abortComputationRef.current(),
+    revertToBaseline: () => revertToBaselineRef.current(),
+    isRunning: () => runningRef.current,
   };
 }

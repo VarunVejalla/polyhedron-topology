@@ -26,7 +26,7 @@ export type ProjectionControllerAPI = {
 };
 
 export type ThreeSceneAPI = {
-  mountRef: React.RefObject<HTMLDivElement>;
+  mountRef: React.RefObject<HTMLDivElement | null>;
 
   renderer: THREE.WebGLRenderer;
   camera: THREE.PerspectiveCamera;
@@ -46,6 +46,9 @@ export type ThreeSceneAPI = {
 
   syncSceneFromX: (X: ReadonlyArray<Vec3>) => void;
   updateSpheresMaterial: (handles: ReadonlyMap<number, Vec3>) => void;
+  zoomBy: (factor: number) => void;
+  resetView: () => void;
+  setAxesVisible: (visible: boolean) => void;
 
   dispose: () => void;
 };

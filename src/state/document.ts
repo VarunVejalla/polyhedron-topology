@@ -18,7 +18,9 @@ type UIState = {
   leftWidth: number;
   showGraphs: boolean;
   show3D: boolean;
-  showOverlay: boolean;
+  showAxes: boolean;
+  showVertexPositions: boolean;
+  showAdvancedSettings: boolean;
 };
 
 type ProjectionState = {
@@ -29,6 +31,9 @@ type ProjectionState = {
   lambdaReg: number;
   itersPerFrame: number;
   itersOnRelease: number;
+  hardProjectMode: "iters" | "tol";
+  hardProjectMaxIters: number;
+  hardProjectTolPlanar: number;
 };
 
 type Document = {
@@ -148,8 +153,18 @@ export function createInitialState(): DocumentState {
       lambdaReg: 0,
       itersPerFrame: 10,
       itersOnRelease: 120,
+      hardProjectMode: "iters",
+      hardProjectMaxIters: 400,
+      hardProjectTolPlanar: 1e-6,
     },
-    ui: { leftWidth: 460, showGraphs: true, show3D: true, showOverlay: true },
+    ui: {
+      leftWidth: 460,
+      showGraphs: true,
+      show3D: true,
+      showAxes: false,
+      showVertexPositions: false,
+      showAdvancedSettings: false,
+    },
   };
 
   return { present, past: [], future: [] };

@@ -1,4 +1,3 @@
-import React from "react";
 import type { Face } from "../../graph/embedding";
 
 type Props = {

@@ -1,4 +1,3 @@
-import React from "react";
 import type { SimpleGraph } from "../../graph/types";
 import { GraphCanvas } from "./GraphCanvas";
 import { EditPanel } from "./EditPanel";
@@ -22,15 +21,15 @@ export function SingleGraphEditor({ title, graph, updateGraph, commitGraph, onSy
   const { w: width, h: height } = canvas;
 
   return (
-    <div style={{ border: "1px solid #e6e6e6", borderRadius: 14, padding: 10, background: "#fff" }}>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
-        <div style={{ fontWeight: 800 }}>{title}</div>
-        <span style={{ marginLeft: 6, fontSize: 12, color: "#444" }}>
-          {st.report.ok ? <>✅ planar + 3-connected</> : <>⚠ {st.report.reason}</>}
+    <div className="editorCard">
+      <div className="editorTitleRow">
+        <div className="editorTitle">{title}</div>
+        <span className={`editorStatus ${st.report.ok ? "editorStatusOk" : "editorStatusWarn"}`}>
+          {st.report.ok ? "OK: planar + 3-connected" : `Issue: ${st.report.reason}`}
         </span>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 260px", gap: 12, alignItems: "start" }}>
+      <div className="editorGrid">
         <div>
           <GraphCanvas
             graph={st.displayGraph}
@@ -49,7 +48,7 @@ export function SingleGraphEditor({ title, graph, updateGraph, commitGraph, onSy
           />
         </div>
 
-        <div style={{ display: "grid", gap: 10 }}>
+        <div className="editorSidePanels">
           <EditPanel
             selectedNodes={st.selectedNodes}
             selectedEdgeId={st.selectedEdgeId}
@@ -62,17 +61,26 @@ export function SingleGraphEditor({ title, graph, updateGraph, commitGraph, onSy
             onPinSelected={st.pinSelected}
           />
 
-          <LayoutPanel
-            isPlanarOk={st.report.ok}
-            layoutMode={st.layoutMode}
-            setLayoutMode={st.setLayoutMode}
-            onApplyLayout={st.applyLayout}
-            polyFaceError={st.polyFaceError}
-          />
+          <details className="editorDetails">
+            <summary>Layout</summary>
+            <LayoutPanel
+              isPlanarOk={st.report.ok}
+              layoutMode={st.layoutMode}
+              setLayoutMode={st.setLayoutMode}
+              onApplyLayout={st.applyLayout}
+              polyFaceError={st.polyFaceError}
+            />
+          </details>
 
-          <DualPanel canSync={!!st.polyFaces} onSyncDual={st.syncDual} />
+          <details className="editorDetails">
+            <summary>Dual sync</summary>
+            <DualPanel canSync={!!st.polyFaces} onSyncDual={st.syncDual} />
+          </details>
 
-          <FacesPanel isPlanarOk={st.report.ok} faces={st.polyFaces} polyFaceError={st.polyFaceError} />
+          <details className="editorDetails">
+            <summary>Faces</summary>
+            <FacesPanel isPlanarOk={st.report.ok} faces={st.polyFaces} polyFaceError={st.polyFaceError} />
+          </details>
         </div>
       </div>
     </div>

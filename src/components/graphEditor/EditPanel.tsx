@@ -1,4 +1,3 @@
-import React from "react";
 import type { NodeId } from "../../graph/types";
 
 type Props = {
@@ -36,7 +35,7 @@ export function EditPanel({
           style={{ padding: "6px 10px", borderRadius: 10, border: "1px solid #ddd", background: edgeCreateMode ? "#f3f3f3" : "white" }}
           title="Edge creation mode: click a start node, then an end node to create an edge."
         >
-          Edge mode {edgeCreateMode ? "✓" : ""}
+          Edge mode {edgeCreateMode ? "ON" : "OFF"}
         </button>
         <button
           onClick={onAddEdge}

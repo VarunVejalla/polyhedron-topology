@@ -1,5 +1,3 @@
-import React from "react";
-
 type LayoutMode = "manual" | "spring" | "tutte";
 
 type Props = {

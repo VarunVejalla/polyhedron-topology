@@ -11,7 +11,7 @@ function hashColor(fi: number): number {
 }
 
 export function useThreePolyhedronScene(
-  mountRef: React.RefObject<HTMLDivElement>,
+  mountRef: React.RefObject<HTMLDivElement | null>,
   faces: number[][],
   initialVertices: Vec3[]
 ): ThreeSceneAPI | null {
@@ -29,7 +29,9 @@ export function useThreePolyhedronScene(
     scene.background = new THREE.Color(0xf6f6f6);
 
     const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 2000);
-    camera.position.set(2.5, 2.0, 2.5);
+    const defaultCameraPos = new THREE.Vector3(2.5, 2.0, 2.5);
+    const defaultTarget = new THREE.Vector3(0, 0, 0);
+    camera.position.copy(defaultCameraPos);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio || 1);
@@ -38,6 +40,11 @@ export function useThreePolyhedronScene(
     const orbit = new OrbitControls(camera, renderer.domElement);
     orbit.enableDamping = true;
     orbit.dampingFactor = 0.08;
+    orbit.target.copy(defaultTarget);
+
+    const axes = new THREE.AxesHelper(1.25);
+    axes.visible = false;
+    scene.add(axes);
 
     // --- Triangulate polygon faces (fan triangulation)
     const triangles: number[][] = [];
@@ -238,6 +245,12 @@ export function useThreePolyhedronScene(
       geom.dispose();
       edgeGeom.dispose();
       sphereGeom.dispose();
+      axes.geometry.dispose();
+      if (Array.isArray(axes.material)) {
+        for (const m of axes.material) m.dispose();
+      } else {
+        axes.material.dispose();
+      }
       // dispose materials (clones)
       (mesh.material as THREE.Material).dispose();
       edgeMat.dispose();
@@ -261,6 +274,26 @@ export function useThreePolyhedronScene(
       computeFaceNormalAndPoint,
       syncSceneFromX,
       updateSpheresMaterial,
+      zoomBy: (factor: number) => {
+        if (!Number.isFinite(factor) || factor <= 0) return;
+        const toCamera = camera.position.clone().sub(orbit.target);
+        const dist = toCamera.length();
+        if (dist <= 1e-9) return;
+        const nextDist = THREE.MathUtils.clamp(dist * factor, 0.2, 80);
+        toCamera.setLength(nextDist);
+        camera.position.copy(orbit.target.clone().add(toCamera));
+        camera.updateProjectionMatrix();
+        orbit.update();
+      },
+      resetView: () => {
+        camera.position.copy(defaultCameraPos);
+        orbit.target.copy(defaultTarget);
+        camera.updateProjectionMatrix();
+        orbit.update();
+      },
+      setAxesVisible: (visible: boolean) => {
+        axes.visible = visible;
+      },
       dispose,
     };
 
