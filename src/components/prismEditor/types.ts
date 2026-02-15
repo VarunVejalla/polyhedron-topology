@@ -49,6 +49,7 @@ export type ThreeSceneAPI = {
   zoomBy: (factor: number) => void;
   resetView: () => void;
   setAxesVisible: (visible: boolean) => void;
+  setGridVisible: (visible: boolean) => void;
 
   dispose: () => void;
 };

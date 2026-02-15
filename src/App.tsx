@@ -23,7 +23,10 @@ export default function App() {
   const [planarity, setPlanarity] = useState(0);
   const [handleCount, setHandleCount] = useState(0);
   const [isComputing, setIsComputing] = useState(false);
+  const [threeOnlyHeight, setThreeOnlyHeight] = useState<number | null>(null);
   const prismRef = useRef<PrismEditorHandle | null>(null);
+  const polyTopologyKey = useMemo(() => JSON.stringify(doc.poly.faces), [doc.poly.faces]);
+  const mainRowRef = useRef<HTMLDivElement | null>(null);
 
   const undo = () => dispatch({ type: "UNDO" });
   const redo = () => dispatch({ type: "REDO" });
@@ -38,7 +41,8 @@ export default function App() {
     const onMove = (e: PointerEvent) => {
       if (!splitDragRef.current.dragging) return;
       const dx = e.clientX - splitDragRef.current.startX;
-      const w = Math.max(260, splitDragRef.current.startW + dx);
+      const maxW = Math.max(260, window.innerWidth - 420);
+      const w = Math.max(260, Math.min(maxW, splitDragRef.current.startW + dx));
       dispatch({ type: "SET_UI", patch: { leftWidth: w } });
     };
     const onUp = () => {
@@ -51,6 +55,36 @@ export default function App() {
       window.removeEventListener("pointerup", onUp);
     };
   }, []);
+
+  useEffect(() => {
+    const clampLeftPane = () => {
+      if (!doc.ui.showGraphs || !doc.ui.show3D) return;
+      const maxW = Math.max(260, window.innerWidth - 420);
+      if (doc.ui.leftWidth > maxW) {
+        dispatch({ type: "SET_UI", patch: { leftWidth: maxW } });
+      }
+    };
+    clampLeftPane();
+    window.addEventListener("resize", clampLeftPane);
+    return () => window.removeEventListener("resize", clampLeftPane);
+  }, [doc.ui.showGraphs, doc.ui.show3D, doc.ui.leftWidth]);
+
+  useEffect(() => {
+    const updateThreeOnlyHeight = () => {
+      const node = mainRowRef.current;
+      if (!node) return;
+      if (!(doc.ui.show3D && !doc.ui.showGraphs)) {
+        setThreeOnlyHeight(null);
+        return;
+      }
+      const top = node.getBoundingClientRect().top;
+      const h = Math.max(320, window.innerHeight - top - 10);
+      setThreeOnlyHeight(h);
+    };
+    updateThreeOnlyHeight();
+    window.addEventListener("resize", updateThreeOnlyHeight);
+    return () => window.removeEventListener("resize", updateThreeOnlyHeight);
+  }, [doc.ui.show3D, doc.ui.showGraphs, doc.ui.showAdvancedSettings]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -222,14 +256,13 @@ export default function App() {
     });
   };
 
-  const toggleViewFlag = (key: "showGraphs" | "show3D" | "showAxes" | "showVertexPositions") => {
+  const toggleViewFlag = (key: "showGraphs" | "show3D" | "showAxes" | "showGrid" | "showVertexPositions") => {
     dispatch({ type: "SET_UI", patch: { [key]: !doc.ui[key] } });
   };
 
   const runAbortAndRevert = () => {
     prismRef.current?.abortComputation();
-    prismRef.current?.revertToBaseline();
-    if (state.past.length > 0) undo();
+    if (state.past.length > 0) dispatch({ type: "UNDO" });
   };
 
   return (
@@ -272,30 +305,6 @@ export default function App() {
           </button>
           <button className={`uiButton ${doc.ui.show3D ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("show3D")}>
             3D
-          </button>
-          <button className={`uiButton ${doc.ui.showAxes ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showAxes")} disabled={!doc.ui.show3D}>
-            Axes
-          </button>
-          <button className={`uiButton ${doc.ui.showVertexPositions ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showVertexPositions")} disabled={!doc.ui.show3D}>
-            Vertex positions
-          </button>
-        </div>
-
-        <div className="toolbarSection">
-          <button className="uiButton" onClick={() => prismRef.current?.hardProject()} disabled={!doc.ui.show3D || isComputing}>
-            Hard project
-          </button>
-          <button className="uiButton" onClick={() => prismRef.current?.clearAllHandles()} disabled={!doc.ui.show3D || isComputing}>
-            Clear handles
-          </button>
-          <button className="uiButton" onClick={() => prismRef.current?.zoomIn()} disabled={!doc.ui.show3D}>
-            +
-          </button>
-          <button className="uiButton" onClick={() => prismRef.current?.zoomOut()} disabled={!doc.ui.show3D}>
-            -
-          </button>
-          <button className="uiButton" onClick={() => prismRef.current?.resetView()} disabled={!doc.ui.show3D}>
-            Reset view
           </button>
         </div>
 
@@ -424,7 +433,7 @@ export default function App() {
         </div>
       )}
 
-      <div className="mainRow">
+      <div className="mainRow" ref={mainRowRef}>
         {doc.ui.showGraphs && (
           <div className="leftPane" style={{ width: doc.ui.leftWidth }}>
             <GraphEditor
@@ -451,8 +460,9 @@ export default function App() {
         )}
 
         {doc.ui.show3D && (
-          <div className="rightPane">
+          <div className="rightPane" style={doc.ui.show3D && !doc.ui.showGraphs && threeOnlyHeight ? { height: `${threeOnlyHeight}px` } : undefined}>
             <PrismEditor
+              key={polyTopologyKey}
               ref={prismRef}
               initialVertices={doc.poly.vertices}
               faces={doc.poly.faces}
@@ -471,6 +481,7 @@ export default function App() {
                 tolPlanar: doc.projection.hardProjectTolPlanar,
               }}
               showAxes={doc.ui.showAxes}
+              showGrid={doc.ui.showGrid}
               onCommitVertices={(verts) => dispatch({ type: "COMMIT_POLY_VERTICES", vertices: verts })}
               onStatus={(s) => {
                 setPlanarity(s.totalPlanarityViolation);
@@ -478,6 +489,33 @@ export default function App() {
               }}
               onRunningChange={setIsComputing}
             />
+
+            <div className="viewportControls">
+              <button className="uiButton" onClick={() => prismRef.current?.zoomIn()} disabled={isComputing} title="Zoom in">
+                +
+              </button>
+              <button className="uiButton" onClick={() => prismRef.current?.zoomOut()} disabled={isComputing} title="Zoom out">
+                -
+              </button>
+              <button className="uiButton" onClick={() => prismRef.current?.resetView()} disabled={isComputing}>
+                Reset view
+              </button>
+              <button className={`uiButton ${doc.ui.showVertexPositions ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showVertexPositions")} disabled={isComputing}>
+                Vertex positions
+              </button>
+              <button className="uiButton" onClick={() => prismRef.current?.clearAllHandles()} disabled={isComputing}>
+                Clear handles
+              </button>
+              <button className="uiButton" onClick={() => prismRef.current?.hardProject()} disabled={isComputing}>
+                Hard project
+              </button>
+              <button className={`uiButton ${doc.ui.showAxes ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showAxes")} disabled={isComputing}>
+                Axes
+              </button>
+              <button className={`uiButton ${doc.ui.showGrid ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showGrid")} disabled={isComputing}>
+                Grid
+              </button>
+            </div>
 
             {doc.ui.showVertexPositions && (
               <div className="vertexPanel">

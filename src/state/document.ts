@@ -19,6 +19,7 @@ type UIState = {
   showGraphs: boolean;
   show3D: boolean;
   showAxes: boolean;
+  showGrid: boolean;
   showVertexPositions: boolean;
   showAdvancedSettings: boolean;
 };
@@ -162,6 +163,7 @@ export function createInitialState(): DocumentState {
       showGraphs: true,
       show3D: true,
       showAxes: false,
+      showGrid: false,
       showVertexPositions: false,
       showAdvancedSettings: false,
     },

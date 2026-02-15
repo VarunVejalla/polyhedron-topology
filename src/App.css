@@ -2,7 +2,7 @@
 .App {
   height: 100vh;
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto auto minmax(0, 1fr);
   background: #f3f5f8;
 }
 
@@ -117,8 +117,10 @@
 .mainRow {
   display: flex;
   min-height: 0;
+  height: 100%;
   padding: 10px;
   gap: 0;
+  align-items: stretch;
 }
 
 .leftPane {
@@ -131,7 +133,8 @@
 
 .rightPane {
   flex: 1;
-  min-width: 0;
+  min-width: 280px;
+  min-height: 0;
   background: #fff;
   border: 1px solid #dde3ea;
   border-radius: 14px;
@@ -228,22 +231,19 @@
   gap: 10px;
 }
 
-.editorDetails {
+.editorCompactPanel {
   border: 1px solid #e3e8ef;
   border-radius: 12px;
   background: #fff;
-  padding: 6px 8px 8px 8px;
+  padding: 8px;
+  display: grid;
+  gap: 8px;
 }
 
-.editorDetails summary {
-  cursor: pointer;
-  font-weight: 600;
-  font-size: 13px;
-  color: #223344;
-}
-
-.editorDetails > :not(summary) {
-  margin-top: 8px;
+.editorCompactRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 
 .vertexPanel {
@@ -259,6 +259,25 @@
   display: grid;
   grid-template-rows: auto 1fr;
   overflow: hidden;
+}
+
+.viewportControls {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: grid;
+  gap: 6px;
+  width: 170px;
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid #dde3ea;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(2px);
+  z-index: 3;
+}
+
+.viewportControls .uiButton {
+  width: 100%;
 }
 
 .vertexPanelTitle {
@@ -323,5 +342,9 @@
   .vertexPanel {
     width: calc(100% - 20px);
     max-height: 45%;
+  }
+
+  .viewportControls {
+    width: 150px;
   }
 }

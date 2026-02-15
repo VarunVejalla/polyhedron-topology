@@ -19,6 +19,7 @@ type Props = {
   params: ProjectorParams;
   hardProject: HardProjectOptions;
   showAxes: boolean;
+  showGrid: boolean;
   onCommitVertices?: (verts: Vec3[]) => void;
   onStatus?: (s: { totalPlanarityViolation: number; handleCount: number }) => void;
   onRunningChange?: (running: boolean) => void;
@@ -36,7 +37,7 @@ export type PrismEditorHandle = {
 };
 
 export const PrismEditor = forwardRef<PrismEditorHandle, Props>(function PrismEditor(
-  { initialVertices, faces, method, params, hardProject, showAxes, onCommitVertices, onStatus, onRunningChange }: Props,
+  { initialVertices, faces, method, params, hardProject, showAxes, showGrid, onCommitVertices, onStatus, onRunningChange }: Props,
   ref
 ) {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -58,6 +59,10 @@ export const PrismEditor = forwardRef<PrismEditorHandle, Props>(function PrismEd
   useEffect(() => {
     scene?.setAxesVisible(showAxes);
   }, [scene, showAxes]);
+
+  useEffect(() => {
+    scene?.setGridVisible(showGrid);
+  }, [scene, showGrid]);
 
   useImperativeHandle(
     ref,

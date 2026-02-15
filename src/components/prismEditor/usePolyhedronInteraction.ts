@@ -130,6 +130,7 @@ export function usePolyhedronInteraction(
       setRunning(true);
       abortRequestedRef.current = false;
 
+      const runController = stateRef.current.controller;
       const maxIters = Math.max(1, Math.floor(stateRef.current.hardProjectMaxIters));
       const tol = Math.max(0, stateRef.current.hardProjectTolPlanar);
       const mode = stateRef.current.hardProjectMode;
@@ -137,6 +138,11 @@ export function usePolyhedronInteraction(
 
       const stepBatch = () => {
         if (disposed) return;
+        if (stateRef.current.controller !== runController) {
+          cancelRunTimer();
+          setRunning(false);
+          return;
+        }
 
         if (abortRequestedRef.current) {
           abortRequestedRef.current = false;

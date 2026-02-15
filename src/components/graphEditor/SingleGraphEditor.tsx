@@ -1,8 +1,6 @@
 import type { SimpleGraph } from "../../graph/types";
 import { GraphCanvas } from "./GraphCanvas";
 import { EditPanel } from "./EditPanel";
-import { LayoutPanel } from "./LayoutPanel";
-import { DualPanel } from "./DualPanel";
 import { FacesPanel } from "./FacesPanel";
 import { useGraphEditorState } from "./useGraphEditorState";
 
@@ -61,26 +59,56 @@ export function SingleGraphEditor({ title, graph, updateGraph, commitGraph, onSy
             onPinSelected={st.pinSelected}
           />
 
-          <details className="editorDetails">
-            <summary>Layout</summary>
-            <LayoutPanel
-              isPlanarOk={st.report.ok}
-              layoutMode={st.layoutMode}
-              setLayoutMode={st.setLayoutMode}
-              onApplyLayout={st.applyLayout}
-              polyFaceError={st.polyFaceError}
-            />
-          </details>
+          <div className="editorCompactPanel">
+            <div className="editorCompactRow">
+              <select
+                value={st.layoutMode}
+                onChange={(e) => st.setLayoutMode(e.target.value as "manual" | "spring" | "tutte")}
+                style={{ padding: "6px 8px", borderRadius: 10, border: "1px solid #ddd", flex: 1 }}
+              >
+                <option value="manual">manual</option>
+                <option value="spring">spring</option>
+                <option value="tutte" disabled={!st.report.ok}>
+                  tutte
+                </option>
+              </select>
+              <button
+                onClick={st.applyLayout}
+                disabled={st.layoutMode === "manual" || (st.layoutMode === "tutte" && !st.report.ok)}
+                className="uiButton"
+              >
+                Apply
+              </button>
+            </div>
 
-          <details className="editorDetails">
-            <summary>Dual sync</summary>
-            <DualPanel canSync={!!st.polyFaces} onSyncDual={st.syncDual} />
-          </details>
+            {st.layoutMode === "tutte" && st.report.ok && st.polyFaces && (
+              <div className="editorCompactRow">
+                <select
+                  value={st.selectedOuterFaceId ?? ""}
+                  onChange={(e) => st.setSelectedOuterFaceId(e.target.value)}
+                  style={{ padding: "6px 8px", borderRadius: 10, border: "1px solid #ddd", flex: 1 }}
+                >
+                  {st.polyFaces.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      outer face: {f.id}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
-          <details className="editorDetails">
-            <summary>Faces</summary>
-            <FacesPanel isPlanarOk={st.report.ok} faces={st.polyFaces} polyFaceError={st.polyFaceError} />
-          </details>
+            <div className="editorCompactRow">
+              <button onClick={st.syncDual} disabled={!st.polyFaces} className="uiButton" style={{ width: "100%" }}>
+                Sync dual
+              </button>
+            </div>
+
+            {st.layoutMode === "tutte" && st.report.ok && st.polyFaceError && (
+              <div style={{ marginTop: 8, fontSize: 12, color: "#c44" }}>{st.polyFaceError}</div>
+            )}
+          </div>
+
+          <FacesPanel isPlanarOk={st.report.ok} faces={st.polyFaces} polyFaceError={st.polyFaceError} />
         </div>
       </div>
     </div>

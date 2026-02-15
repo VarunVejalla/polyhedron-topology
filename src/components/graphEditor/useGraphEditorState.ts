@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { NodeId, SimpleGraph } from "../../graph/types";
 import { cloneGraph, edgeIdFor } from "../../graph/core";
 import { checkPolyhedral } from "../../graph/validity";
@@ -69,6 +69,7 @@ export function useGraphEditorState(opts: UseGraphEditorStateOpts) {
   const [pendingEdgeStart, setPendingEdgeStart] = useState<NodeId | null>(null);
 
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("manual");
+  const [selectedOuterFaceId, setSelectedOuterFaceId] = useState<string | null>(null);
 
   const topology = useMemo(() => {
     const nodeIds = g.nodes
@@ -113,6 +114,18 @@ export function useGraphEditorState(opts: UseGraphEditorStateOpts) {
       return { polyFaces: null, polyFaceError: String(e?.message ?? e) };
     }
   }, [topology.nodeIds, topology.edgesTopo, report]);
+
+  useEffect(() => {
+    if (!polyFaces || polyFaces.length === 0) {
+      setSelectedOuterFaceId(null);
+      return;
+    }
+    const exists = selectedOuterFaceId ? polyFaces.some((f) => f.id === selectedOuterFaceId) : false;
+    if (!exists) {
+      const outer = chooseOuterFace(polyFaces);
+      setSelectedOuterFaceId(outer?.id ?? polyFaces[0].id);
+    }
+  }, [polyFaces, selectedOuterFaceId]);
 
   const setGraph = (next: SimpleGraph, commit: boolean) => {
     updateGraph(next);
@@ -284,7 +297,9 @@ export function useGraphEditorState(opts: UseGraphEditorStateOpts) {
     if (!report.ok) return;
     if (!polyFaces) return;
 
-    const outerFace = chooseOuterFace(polyFaces);
+    const outerFace =
+      (selectedOuterFaceId ? polyFaces.find((f) => f.id === selectedOuterFaceId) : null) ??
+      chooseOuterFace(polyFaces);
     if (!outerFace) return;
 
     const pos = tutteLayout(g, outerFace.cycle, canvas, pinned);
@@ -336,6 +351,8 @@ export function useGraphEditorState(opts: UseGraphEditorStateOpts) {
     layoutMode,
     polyFaces,
     polyFaceError,
+    selectedOuterFaceId,
+    setSelectedOuterFaceId,
     setLayoutMode,
     onBackgroundDown,
     onPointerMove,
