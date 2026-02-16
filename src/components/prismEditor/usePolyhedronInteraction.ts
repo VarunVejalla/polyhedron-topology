@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import type { Vec3 } from "../../engine/math/types";
-import type { ProjectionControllerAPI, ThreeSceneAPI } from "./types";
+import type { OverlayOptions, ProjectionControllerAPI, ThreeSceneAPI } from "./types";
 
 /**
  * Owns all pointer interaction and long-running projection actions.
@@ -10,11 +10,18 @@ import type { ProjectionControllerAPI, ThreeSceneAPI } from "./types";
 export function usePolyhedronInteraction(
   scene: ThreeSceneAPI | null,
   controller: ProjectionControllerAPI,
+  overlayOptions: OverlayOptions,
   hardProjectMode: "iters" | "tol",
   hardProjectMaxIters: number,
   hardProjectTolPlanar: number,
   onCommitVertices?: (verts: Vec3[]) => void,
-  onStatus?: (s: { totalPlanarityViolation: number; handleCount: number }) => void,
+  onStatus?: (s: {
+    totalPlanarityViolation: number;
+    handleCount: number;
+    unitNormalityMetric: number;
+    convexityViolation: number;
+    isConvex: boolean;
+  }) => void,
   onRunningChange?: (running: boolean) => void
 ) {
   const stateRef = useRef({
@@ -22,6 +29,7 @@ export function usePolyhedronInteraction(
     onCommitVertices,
     onStatus,
     onRunningChange,
+    overlayOptions,
     hardProjectMode,
     hardProjectMaxIters,
     hardProjectTolPlanar,
@@ -33,11 +41,17 @@ export function usePolyhedronInteraction(
       onCommitVertices,
       onStatus,
       onRunningChange,
+      overlayOptions,
       hardProjectMode,
       hardProjectMaxIters,
       hardProjectTolPlanar,
     };
-  }, [controller, onCommitVertices, onStatus, onRunningChange, hardProjectMode, hardProjectMaxIters, hardProjectTolPlanar]);
+  }, [controller, onCommitVertices, onStatus, onRunningChange, overlayOptions, hardProjectMode, hardProjectMaxIters, hardProjectTolPlanar]);
+
+  useEffect(() => {
+    if (!scene) return;
+    scene.setDerivedOverlay(controller.getDerivedCache(), overlayOptions);
+  }, [scene, controller, overlayOptions]);
 
   const runningRef = useRef(false);
   const abortRequestedRef = useRef(false);
@@ -53,8 +67,18 @@ export function usePolyhedronInteraction(
     stateRef.current.onRunningChange?.(running);
   };
 
-  const pushStatus = (diag: { totalPlanarityViolation: number }, handleCount: number) => {
-    stateRef.current.onStatus?.({ totalPlanarityViolation: diag.totalPlanarityViolation, handleCount });
+  const pushStatus = (
+    diag: { totalPlanarityViolation: number },
+    handleCount: number,
+    extra: { unitNormalityMetric: number; convexityViolation: number; isConvex: boolean }
+  ) => {
+    stateRef.current.onStatus?.({
+      totalPlanarityViolation: diag.totalPlanarityViolation,
+      handleCount,
+      unitNormalityMetric: extra.unitNormalityMetric,
+      convexityViolation: extra.convexityViolation,
+      isConvex: extra.isConvex,
+    });
   };
 
   useEffect(() => {
@@ -84,9 +108,16 @@ export function usePolyhedronInteraction(
 
     const syncFromController = () => {
       const c = stateRef.current.controller;
-      syncSceneFromX(c.getXRef());
+      const X = c.getXRef();
+      const derived = c.getDerivedCache();
+      syncSceneFromX(X);
+      scene.setDerivedOverlay(derived, stateRef.current.overlayOptions);
       updateSpheresMaterial(c.handlesRef.current);
-      pushStatus(c.diagnostics(), c.getHandleCount());
+      pushStatus({ totalPlanarityViolation: derived.planarityMetric }, c.getHandleCount(), {
+        unitNormalityMetric: derived.unitNormalityMetric,
+        convexityViolation: derived.convexityViolation,
+        isConvex: derived.isConvex,
+      });
     };
 
     const applyProjection = (iters: number) => {

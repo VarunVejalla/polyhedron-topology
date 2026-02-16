@@ -20,8 +20,19 @@ type Props = {
   hardProject: HardProjectOptions;
   showAxes: boolean;
   showGrid: boolean;
+  showNormals: boolean;
+  showCom: boolean;
+  showProjections: boolean;
+  showStability: boolean;
+  showBasins: boolean;
   onCommitVertices?: (verts: Vec3[]) => void;
-  onStatus?: (s: { totalPlanarityViolation: number; handleCount: number }) => void;
+  onStatus?: (s: {
+    totalPlanarityViolation: number;
+    handleCount: number;
+    unitNormalityMetric: number;
+    convexityViolation: number;
+    isConvex: boolean;
+  }) => void;
   onRunningChange?: (running: boolean) => void;
 };
 
@@ -37,7 +48,23 @@ export type PrismEditorHandle = {
 };
 
 export const PrismEditor = forwardRef<PrismEditorHandle, Props>(function PrismEditor(
-  { initialVertices, faces, method, params, hardProject, showAxes, showGrid, onCommitVertices, onStatus, onRunningChange }: Props,
+  {
+    initialVertices,
+    faces,
+    method,
+    params,
+    hardProject,
+    showAxes,
+    showGrid,
+    showNormals,
+    showCom,
+    showProjections,
+    showStability,
+    showBasins,
+    onCommitVertices,
+    onStatus,
+    onRunningChange,
+  }: Props,
   ref
 ) {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -48,6 +75,7 @@ export const PrismEditor = forwardRef<PrismEditorHandle, Props>(function PrismEd
   const interaction = usePolyhedronInteraction(
     scene,
     controller,
+    { showNormals, showCom, showProjections, showStability, showBasins },
     hardProject.mode,
     hardProject.maxIters,
     hardProject.tolPlanar,

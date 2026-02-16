@@ -3,6 +3,7 @@ import type * as THREE from "three";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { Vec3 } from "../../engine/math/types";
 import type { IProjector, ProjectorParams } from "../../engine/projection";
+import type { PolyDerivedCache, PolyState } from "../../engine/poly";
 
 export type ProjectionControllerAPI = {
   projectorRef: React.MutableRefObject<IProjector | null>;
@@ -19,10 +20,20 @@ export type ProjectionControllerAPI = {
   stepUntilTol: (maxIters: number, tol: number) => void;
 
   getXRef: () => ReadonlyArray<Vec3>;
+  getPolyState: () => PolyState;
+  getDerivedCache: () => PolyDerivedCache;
   snapshot: () => Vec3[];
   commitBaseline: (snap: Vec3[]) => void;
 
   diagnostics: () => { totalPlanarityViolation: number };
+};
+
+export type OverlayOptions = {
+  showNormals: boolean;
+  showCom: boolean;
+  showProjections: boolean;
+  showStability: boolean;
+  showBasins: boolean;
 };
 
 export type ThreeSceneAPI = {
@@ -45,6 +56,7 @@ export type ThreeSceneAPI = {
   ) => { normal: THREE.Vector3; point: THREE.Vector3 } | null;
 
   syncSceneFromX: (X: ReadonlyArray<Vec3>) => void;
+  setDerivedOverlay: (cache: PolyDerivedCache | null, options: OverlayOptions) => void;
   updateSpheresMaterial: (handles: ReadonlyMap<number, Vec3>) => void;
   zoomBy: (factor: number) => void;
   resetView: () => void;

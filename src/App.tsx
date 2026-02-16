@@ -21,6 +21,9 @@ export default function App() {
   const doc = state.present;
 
   const [planarity, setPlanarity] = useState(0);
+  const [unitNormality, setUnitNormality] = useState(0);
+  const [convexityViolation, setConvexityViolation] = useState(0);
+  const [isConvexNow, setIsConvexNow] = useState(true);
   const [handleCount, setHandleCount] = useState(0);
   const [isComputing, setIsComputing] = useState(false);
   const [threeOnlyHeight, setThreeOnlyHeight] = useState<number | null>(null);
@@ -256,7 +259,19 @@ export default function App() {
     });
   };
 
-  const toggleViewFlag = (key: "showGraphs" | "show3D" | "showAxes" | "showGrid" | "showVertexPositions") => {
+  const toggleViewFlag = (
+    key:
+      | "showGraphs"
+      | "show3D"
+      | "showAxes"
+      | "showGrid"
+      | "showVertexPositions"
+      | "showNormals"
+      | "showCom"
+      | "showProjections"
+      | "showStability"
+      | "showBasins"
+  ) => {
     dispatch({ type: "SET_UI", patch: { [key]: !doc.ui[key] } });
   };
 
@@ -310,6 +325,9 @@ export default function App() {
 
         <div className="toolbarSection toolbarSectionRight">
           <div className="statusPill">Planarity: {planarity.toExponential(2)}</div>
+          <div className="statusPill">Normality: {unitNormality.toExponential(2)}</div>
+          <div className="statusPill">Convexity: {convexityViolation.toExponential(2)}</div>
+          <div className={`statusPill ${isConvexNow ? "" : "statusBusy"}`}>{isConvexNow ? "Convex" : "Non-convex"}</div>
           <div className="statusPill">Handles: {handleCount}</div>
           <div className={`statusPill ${isComputing ? "statusBusy" : ""}`}>{isComputing ? "Running" : "Idle"}</div>
           <button
@@ -482,10 +500,18 @@ export default function App() {
               }}
               showAxes={doc.ui.showAxes}
               showGrid={doc.ui.showGrid}
+              showNormals={doc.ui.showNormals}
+              showCom={doc.ui.showCom}
+              showProjections={doc.ui.showProjections}
+              showStability={doc.ui.showStability}
+              showBasins={doc.ui.showBasins}
               onCommitVertices={(verts) => dispatch({ type: "COMMIT_POLY_VERTICES", vertices: verts })}
               onStatus={(s) => {
                 setPlanarity(s.totalPlanarityViolation);
                 setHandleCount(s.handleCount);
+                setUnitNormality(s.unitNormalityMetric);
+                setConvexityViolation(s.convexityViolation);
+                setIsConvexNow(s.isConvex);
               }}
               onRunningChange={setIsComputing}
             />
@@ -514,6 +540,25 @@ export default function App() {
               </button>
               <button className={`uiButton ${doc.ui.showGrid ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showGrid")} disabled={isComputing}>
                 Grid
+              </button>
+              <button className={`uiButton ${doc.ui.showNormals ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showNormals")} disabled={isComputing}>
+                Normals
+              </button>
+              <button className={`uiButton ${doc.ui.showCom ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showCom")} disabled={isComputing}>
+                COM
+              </button>
+              <button
+                className={`uiButton ${doc.ui.showProjections ? "uiButtonActive" : ""}`}
+                onClick={() => toggleViewFlag("showProjections")}
+                disabled={isComputing}
+              >
+                COM proj
+              </button>
+              <button className={`uiButton ${doc.ui.showStability ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showStability")} disabled={isComputing}>
+                Stability
+              </button>
+              <button className={`uiButton ${doc.ui.showBasins ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showBasins")} disabled={isComputing}>
+                Basins
               </button>
             </div>
 

@@ -2,12 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { Vec3 } from "../../engine/math/types";
-import type { ThreeSceneAPI } from "./types";
-
-function hashColor(fi: number): number {
-  const palette = [0x8ecae6, 0x219ebc, 0xffb703, 0xfb8500, 0xbde0fe, 0xcaffbf, 0xffc6ff, 0xdee2ff];
-  return palette[fi % palette.length];
-}
+import type { PolyDerivedCache } from "../../engine/poly";
+import type { OverlayOptions, ThreeSceneAPI } from "./types";
 
 function makeLabelSprite(text: string, color: string): THREE.Sprite {
   const canvas = document.createElement("canvas");
@@ -48,6 +44,27 @@ function clearGroup(group: THREE.Group) {
   group.clear();
 }
 
+function disposeObjectDeep(obj: THREE.Object3D) {
+  obj.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    if (mesh.geometry) mesh.geometry.dispose();
+    const mat = mesh.material as THREE.Material | THREE.Material[] | undefined;
+    if (Array.isArray(mat)) {
+      for (const m of mat) m.dispose();
+    } else {
+      mat?.dispose();
+    }
+  });
+}
+
+const basinPalette = [
+  new THREE.Color("#456990"),
+  new THREE.Color("#f45b69"),
+  new THREE.Color("#6ecb63"),
+  new THREE.Color("#f6ae2d"),
+  new THREE.Color("#7d5ba6"),
+];
+
 function zoomStepFromDistance(dist: number): number {
   const target = Math.max(0.05, dist / 7);
   const pow = Math.pow(10, Math.floor(Math.log10(target)));
@@ -77,6 +94,7 @@ export function useThreePolyhedronScene(
     if (!mount) return;
 
     const X0 = initialVertices;
+    let currentX: Vec3[] = X0.map((p) => [p[0], p[1], p[2]] as Vec3);
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0xf6f6f6);
@@ -107,6 +125,22 @@ export function useThreePolyhedronScene(
     const axisLabels = new THREE.Group();
     axisLabels.visible = false;
     scene.add(axisLabels);
+
+    const analysisRoot = new THREE.Group();
+    scene.add(analysisRoot);
+    const normalsGroup = new THREE.Group();
+    const comGroup = new THREE.Group();
+    const projectionsGroup = new THREE.Group();
+    analysisRoot.add(normalsGroup, comGroup, projectionsGroup);
+
+    let currentOverlayOptions: OverlayOptions = {
+      showNormals: false,
+      showCom: false,
+      showProjections: false,
+      showStability: false,
+      showBasins: false,
+    };
+    let currentDerived: PolyDerivedCache | null = null;
 
     let labelStep = Number.NaN;
     const rebuildLabels = (step: number) => {
@@ -157,14 +191,6 @@ export function useThreePolyhedronScene(
       }
     }
 
-    const faceRGB: Array<[number, number, number]> = faces.map((_f, fi) => {
-      const hex = hashColor(fi);
-      const r = ((hex >> 16) & 255) / 255;
-      const g = ((hex >> 8) & 255) / 255;
-      const b = (hex & 255) / 255;
-      return [r, g, b];
-    });
-
     const geom = new THREE.BufferGeometry();
     const triPos = new Float32Array(triangles.length * 3 * 3);
     const triCol = new Float32Array(triangles.length * 3 * 3);
@@ -200,11 +226,29 @@ export function useThreePolyhedronScene(
       }
     };
 
-    const writeTriColors = () => {
+    const writeTriColors = (derived: PolyDerivedCache | null, options: OverlayOptions) => {
       let dst = 0;
       for (let ti = 0; ti < triangles.length; ti++) {
         const fi = triToFace[ti] ?? 0;
-        const [r, g, b] = faceRGB[fi] ?? [0.7, 0.7, 0.7];
+        let color: [number, number, number] = [0.7, 0.7, 0.7];
+        if (derived && options.showBasins) {
+          const bi = derived.basinColorByFace[fi] ?? 0;
+          const c = basinPalette[bi % basinPalette.length] ?? new THREE.Color(0.7, 0.7, 0.7);
+          color = [c.r, c.g, c.b];
+        } else if (derived) {
+          const ci = derived.defaultColorByFace[fi] ?? (fi % basinPalette.length);
+          const c = basinPalette[ci % basinPalette.length] ?? new THREE.Color(0.7, 0.7, 0.7);
+          color = [c.r, c.g, c.b];
+        } else {
+          const c = basinPalette[fi % basinPalette.length] ?? new THREE.Color(0.7, 0.7, 0.7);
+          color = [c.r, c.g, c.b];
+        }
+
+        if (derived && options.showStability) {
+          const stable = derived.stableFace[fi] ?? false;
+          color = stable ? [0.3, 0.75, 0.35] : [0.86, 0.38, 0.34];
+        }
+        const [r, g, b] = color;
         for (let k = 0; k < 3; k++) {
           triCol[dst++] = r;
           triCol[dst++] = g;
@@ -214,7 +258,7 @@ export function useThreePolyhedronScene(
     };
 
     writeTriPositions(X0);
-    writeTriColors();
+    writeTriColors(null, currentOverlayOptions);
 
     geom.setAttribute("position", new THREE.BufferAttribute(triPos, 3));
     geom.setAttribute("color", new THREE.BufferAttribute(triCol, 3));
@@ -338,13 +382,102 @@ export function useThreePolyhedronScene(
       return { normal: nrm, point: cen };
     };
 
+    const clearOverlayGroup = (group: THREE.Group) => {
+      for (const child of [...group.children]) {
+        disposeObjectDeep(child);
+        group.remove(child);
+      }
+    };
+
+    const rebuildAnalysisOverlay = () => {
+      writeTriColors(currentDerived, currentOverlayOptions);
+      (geom.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true;
+
+      clearOverlayGroup(normalsGroup);
+      clearOverlayGroup(comGroup);
+      clearOverlayGroup(projectionsGroup);
+
+      normalsGroup.visible = currentOverlayOptions.showNormals;
+      comGroup.visible = currentOverlayOptions.showCom;
+      projectionsGroup.visible = currentOverlayOptions.showProjections;
+
+      if (!currentDerived) return;
+
+      if (currentOverlayOptions.showCom) {
+        const g = new THREE.SphereGeometry(0.05, 14, 10);
+        const m = new THREE.MeshBasicMaterial({ color: 0xfee440 });
+        const s = new THREE.Mesh(g, m);
+        const c = currentDerived.centerOfMass;
+        s.position.set(c[0], c[1], c[2]);
+        comGroup.add(s);
+      }
+
+      if (currentOverlayOptions.showProjections) {
+        for (let fi = 0; fi < faces.length; fi++) {
+          const p = currentDerived.projectedComByFace[fi];
+          const stable = currentDerived.stableFace[fi] ?? false;
+          const g = new THREE.SphereGeometry(0.03, 10, 8);
+          const m = new THREE.MeshBasicMaterial({ color: stable ? 0x24b06f : 0xd64f45 });
+          const s = new THREE.Mesh(g, m);
+          s.position.set(p[0], p[1], p[2]);
+          projectionsGroup.add(s);
+        }
+      }
+
+      if (currentOverlayOptions.showNormals) {
+        for (let fi = 0; fi < faces.length; fi++) {
+          const cyc = faces[fi];
+          if (cyc.length === 0) continue;
+          const c = [0, 0, 0] as Vec3;
+          for (let i = 0; i < cyc.length; i++) {
+            const p = currentX[cyc[i]];
+            c[0] += p[0];
+            c[1] += p[1];
+            c[2] += p[2];
+          }
+          c[0] /= cyc.length;
+          c[1] /= cyc.length;
+          c[2] /= cyc.length;
+
+          // Best effort normal from Newell-style sum on the polygon.
+          let nx = 0, ny = 0, nz = 0;
+          for (let i = 0; i < cyc.length; i++) {
+            const a = currentX[cyc[i]];
+            const b = currentX[cyc[(i + 1) % cyc.length]];
+            nx += (a[1] - b[1]) * (a[2] + b[2]);
+            ny += (a[2] - b[2]) * (a[0] + b[0]);
+            nz += (a[0] - b[0]) * (a[1] + b[1]);
+          }
+          const len = Math.hypot(nx, ny, nz);
+          if (len <= 1e-12) continue;
+          nx /= len;
+          ny /= len;
+          nz /= len;
+
+          const dir = new THREE.Vector3(nx, ny, nz);
+          const origin = new THREE.Vector3(c[0], c[1], c[2]);
+          const length = 0.28;
+          const headLength = 0.08;
+          const headWidth = 0.045;
+          const colorIndex = currentOverlayOptions.showBasins
+            ? (currentDerived.basinColorByFace[fi] ?? (fi % basinPalette.length))
+            : (currentDerived.defaultColorByFace[fi] ?? (fi % basinPalette.length));
+          const color = basinPalette[colorIndex % basinPalette.length] ?? new THREE.Color(0.7, 0.7, 0.7);
+          const arrow = new THREE.ArrowHelper(dir, origin, length, color.getHex(), headLength, headWidth);
+          normalsGroup.add(arrow);
+        }
+      }
+    };
+
     const syncSceneFromX = (X: ReadonlyArray<Vec3>) => {
       if (X.length !== n) return;
+      currentX = X.map((p) => [p[0], p[1], p[2]] as Vec3);
       writeTriPositions(X);
       (geom.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
       writeEdgePositions(X);
       (edgeGeom.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
       for (let i = 0; i < n; i++) vMeshes[i].position.set(X[i][0], X[i][1], X[i][2]);
+      rebuildAnalysisOverlay();
     };
 
     const resize = () => {
@@ -387,6 +520,10 @@ export function useThreePolyhedronScene(
         axes.material.dispose();
       }
       clearGroup(axisLabels);
+      clearOverlayGroup(normalsGroup);
+      clearOverlayGroup(comGroup);
+      clearOverlayGroup(projectionsGroup);
+      scene.remove(analysisRoot);
       (mesh.material as THREE.Material).dispose();
       edgeMat.dispose();
       matFree.dispose();
@@ -408,6 +545,11 @@ export function useThreePolyhedronScene(
       setMouseFromEvent,
       computeFaceNormalAndPoint,
       syncSceneFromX,
+      setDerivedOverlay: (cache: PolyDerivedCache | null, options: OverlayOptions) => {
+        currentDerived = cache;
+        currentOverlayOptions = { ...options };
+        rebuildAnalysisOverlay();
+      },
       updateSpheresMaterial,
       zoomBy: (factor: number) => {
         if (!Number.isFinite(factor) || factor <= 0) return;

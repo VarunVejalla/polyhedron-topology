@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { Vec3 } from "../../engine/math/types";
 import { createProjector, type IProjector, type ProjectorParams, type ProjectionMethod } from "../../engine/projection";
+import { buildPolyDerivedCache, buildPolyState, type PlaneEq, type PolyDerivedCache, type PolyState } from "../../engine/poly";
 import type { ProjectionControllerAPI } from "./types";
 
 export function useProjectionController(
@@ -14,6 +15,16 @@ export function useProjectionController(
   const handlesRef = useRef<Map<number, Vec3>>(new Map());
   const baselineRef = useRef<Vec3[]>(initialVertices.map((p: Vec3) => [...p] as Vec3));
   const paramsRef = useRef<ProjectorParams>(params);
+  const lastPlanesRef = useRef<PlaneEq[]>([]);
+  const polyStateRef = useRef<PolyState>(buildPolyState(initialVertices, faces));
+  const derivedRef = useRef<PolyDerivedCache>(buildPolyDerivedCache(polyStateRef.current));
+
+  const recomputePolyCache = useCallback((X: ReadonlyArray<Vec3>) => {
+    const state = buildPolyState(X, faces, lastPlanesRef.current);
+    lastPlanesRef.current = state.facePlanes.map((pl) => ({ n: [pl.n[0], pl.n[1], pl.n[2]], b: pl.b }));
+    polyStateRef.current = state;
+    derivedRef.current = buildPolyDerivedCache(state);
+  }, [faces]);
 
   // Hot-path reads params from a ref.
   useEffect(() => {
@@ -31,7 +42,9 @@ export function useProjectionController(
     baselineRef.current = initialVertices.map((p: Vec3) => [...p] as Vec3);
     handlesRef.current.clear();
     projectorRef.current = createProjector(method, faces, baselineRef.current, paramsRef.current);
-  }, [topologyKey, method, faces, initialVertices]);
+    lastPlanesRef.current = [];
+    recomputePolyCache(baselineRef.current);
+  }, [topologyKey, method, faces, initialVertices, recomputePolyCache]);
 
   const setHandle = useCallback((vid: number, p: Vec3) => {
     handlesRef.current.set(vid, [...p] as Vec3);
@@ -52,7 +65,8 @@ export function useProjectionController(
     if (!proj) return;
     proj.setHandles({ targets: handlesRef.current });
     proj.step(iters);
-  }, []);
+    recomputePolyCache(proj.getPositionsRef());
+  }, [recomputePolyCache]);
 
   const stepUntilTol = useCallback((maxIters: number, tol: number) => {
     const proj = projectorRef.current;
@@ -66,7 +80,8 @@ export function useProjectionController(
       const d = proj.diagnostics();
       if (d.totalPlanarityViolation <= tol) break;
     }
-  }, []);
+    recomputePolyCache(proj.getPositionsRef());
+  }, [recomputePolyCache]);
 
   const getXRef = useCallback((): ReadonlyArray<Vec3> => {
     return projectorRef.current?.getPositionsRef() ?? baselineRef.current;
@@ -79,7 +94,20 @@ export function useProjectionController(
   const commitBaseline = useCallback((snap: Vec3[]) => {
     baselineRef.current = snap;
     projectorRef.current?.reset(snap);
-  }, []);
+    recomputePolyCache(snap);
+  }, [recomputePolyCache]);
+
+  const getPolyState = useCallback((): PolyState => {
+    const X = projectorRef.current?.getPositionsRef() ?? baselineRef.current;
+    recomputePolyCache(X);
+    return polyStateRef.current;
+  }, [recomputePolyCache]);
+
+  const getDerivedCache = useCallback((): PolyDerivedCache => {
+    const X = projectorRef.current?.getPositionsRef() ?? baselineRef.current;
+    recomputePolyCache(X);
+    return derivedRef.current;
+  }, [recomputePolyCache]);
 
   const diagnostics = useCallback(() => {
     return projectorRef.current?.diagnostics() ?? { totalPlanarityViolation: 0 };
@@ -99,6 +127,8 @@ export function useProjectionController(
       step,
       stepUntilTol,
       getXRef,
+      getPolyState,
+      getDerivedCache,
       snapshot,
       commitBaseline,
       diagnostics,
@@ -111,6 +141,8 @@ export function useProjectionController(
       step,
       stepUntilTol,
       getXRef,
+      getPolyState,
+      getDerivedCache,
       snapshot,
       commitBaseline,
       diagnostics,
