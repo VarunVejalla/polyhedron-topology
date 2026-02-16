@@ -128,8 +128,13 @@ export function useGraphEditorState(opts: UseGraphEditorStateOpts) {
   }, [polyFaces, selectedOuterFaceId]);
 
   const setGraph = (next: SimpleGraph, commit: boolean) => {
+    if (commit) {
+      // Commit actions already update present state and push history.
+      // Dispatching a live update first breaks undo/redo semantics.
+      commitGraph(next);
+      return;
+    }
     updateGraph(next);
-    if (commit) commitGraph(next);
   };
 
   // The graph displayed in the canvas (committed graph + drag overlay).

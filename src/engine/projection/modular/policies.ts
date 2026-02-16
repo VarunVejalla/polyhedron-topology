@@ -8,16 +8,7 @@ import type {
   StepProposal,
   StopPolicy,
 } from "./types";
-
-function dotN(a: ReadonlyArray<number>, b: ReadonlyArray<number>): number {
-  let s = 0;
-  for (let i = 0; i < a.length; i++) s += a[i] * b[i];
-  return s;
-}
-
-function normN(a: ReadonlyArray<number>): number {
-  return Math.sqrt(Math.max(0, dotN(a, a)));
-}
+import { normN } from "../shared/numeric";
 
 export type ArmijoParams = {
   c1: number;

@@ -77,8 +77,8 @@ export function useProjectionController(
       const batch = Math.min(8, maxIters - it);
       proj.step(batch);
       it += batch;
-      const d = proj.diagnostics();
-      if (d.totalPlanarityViolation <= tol) break;
+      recomputePolyCache(proj.getPositionsRef());
+      if (derivedRef.current.planarityMetric <= tol) break;
     }
     recomputePolyCache(proj.getPositionsRef());
   }, [recomputePolyCache]);
@@ -110,8 +110,10 @@ export function useProjectionController(
   }, [recomputePolyCache]);
 
   const diagnostics = useCallback(() => {
-    return projectorRef.current?.diagnostics() ?? { totalPlanarityViolation: 0 };
-  }, []);
+    const X = projectorRef.current?.getPositionsRef() ?? baselineRef.current;
+    recomputePolyCache(X);
+    return { totalPlanarityViolation: derivedRef.current.planarityMetric };
+  }, [recomputePolyCache]);
 
   // Keep the returned controller API object stable across renders.
   return useMemo(

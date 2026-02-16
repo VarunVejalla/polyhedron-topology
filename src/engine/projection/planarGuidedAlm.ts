@@ -1,6 +1,9 @@
 import type { Vec3 } from "../math/types";
 import { bestFitPlanePCA } from "../geom/plane";
 import type { HandleSet, IProjector } from "./index";
+import { sumSquaredPlanarityResidual } from "./shared/metrics";
+import { dotN, normN, solveCG } from "./shared/numeric";
+import { evaluateVertexTrackingObjectiveAndGradient } from "./shared/regularity";
 
 type Incidence = {
   fi: number;
@@ -52,24 +55,6 @@ export type GuidedALMParams = {
 
 function dot3(a: Vec3, b: Vec3): number {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-}
-
-function cross3(a: Vec3, b: Vec3): Vec3 {
-  return [
-    a[1] * b[2] - a[2] * b[1],
-    a[2] * b[0] - a[0] * b[2],
-    a[0] * b[1] - a[1] * b[0],
-  ];
-}
-
-function dotN(a: ReadonlyArray<number>, b: ReadonlyArray<number>): number {
-  let s = 0;
-  for (let i = 0; i < a.length; i++) s += a[i] * b[i];
-  return s;
-}
-
-function normN(a: ReadonlyArray<number>): number {
-  return Math.sqrt(Math.max(0, dotN(a, a)));
 }
 
 export class GuidedALMPlanarProjector implements IProjector {
@@ -305,127 +290,21 @@ export class GuidedALMPlanarProjector implements IProjector {
     return out;
   }
 
-  private regularityValueAndGradient(positions: ReadonlyArray<Vec3>, epsArea: number, gradAccum?: Vec3[]): number {
-    let total = 0;
-    for (let fi = 0; fi < this.faces.length; fi++) {
-      const face = this.faces[fi];
-      const nSides = face.length;
-      if (nSides < 3) continue;
-
-      let perimeter = 0;
-      for (let i = 0; i < nSides; i++) {
-        const ia = face[i];
-        const ib = face[(i + 1) % nSides];
-        const ex = positions[ib][0] - positions[ia][0];
-        const ey = positions[ib][1] - positions[ia][1];
-        const ez = positions[ib][2] - positions[ia][2];
-        perimeter += Math.hypot(ex, ey, ez);
-      }
-
-      const areaVec: Vec3 = [0, 0, 0];
-      for (let i = 0; i < nSides; i++) {
-        const ia = face[i];
-        const ib = face[(i + 1) % nSides];
-        const a = positions[ia];
-        const b = positions[ib];
-        areaVec[0] += 0.5 * (a[1] * b[2] - a[2] * b[1]);
-        areaVec[1] += 0.5 * (a[2] * b[0] - a[0] * b[2]);
-        areaVec[2] += 0.5 * (a[0] * b[1] - a[1] * b[0]);
-      }
-
-      const area = Math.sqrt(dot3(areaVec, areaVec) + epsArea * epsArea);
-      const invArea = 1 / Math.max(1e-12, area);
-      const nHat: Vec3 = [areaVec[0] * invArea, areaVec[1] * invArea, areaVec[2] * invArea];
-
-      const cReg = 4 * nSides * Math.tan(Math.PI / nSides);
-      const invDen = 1 / Math.max(1e-12, cReg * area);
-      const reg = perimeter * perimeter * invDen - 1;
-      const regSq = reg * reg;
-      total += regSq;
-
-      if (!gradAccum) continue;
-
-      const regScale = 2 * reg;
-      const coeffP = regScale * 2 * perimeter * invDen;
-      const coeffA = regScale * (-(perimeter * perimeter) / Math.max(1e-12, cReg * area * area));
-      for (let i = 0; i < nSides; i++) {
-        const vi = face[i];
-        const prev = face[(i - 1 + nSides) % nSides];
-        const next = face[(i + 1) % nSides];
-
-        const p = positions[vi];
-        const pPrev = positions[prev];
-        const pNext = positions[next];
-
-        const ePrev: Vec3 = [p[0] - pPrev[0], p[1] - pPrev[1], p[2] - pPrev[2]];
-        const eNext: Vec3 = [p[0] - pNext[0], p[1] - pNext[1], p[2] - pNext[2]];
-        const lPrev = Math.max(1e-12, Math.hypot(ePrev[0], ePrev[1], ePrev[2]));
-        const lNext = Math.max(1e-12, Math.hypot(eNext[0], eNext[1], eNext[2]));
-        const dP: Vec3 = [
-          ePrev[0] / lPrev + eNext[0] / lNext,
-          ePrev[1] / lPrev + eNext[1] / lNext,
-          ePrev[2] / lPrev + eNext[2] / lNext,
-        ];
-
-        const edgePN: Vec3 = [pNext[0] - pPrev[0], pNext[1] - pPrev[1], pNext[2] - pPrev[2]];
-        const dA = cross3(edgePN, nHat);
-        dA[0] *= 0.5;
-        dA[1] *= 0.5;
-        dA[2] *= 0.5;
-
-        gradAccum[vi][0] += coeffP * dP[0] + coeffA * dA[0];
-        gradAccum[vi][1] += coeffP * dP[1] + coeffA * dA[1];
-        gradAccum[vi][2] += coeffP * dP[2] + coeffA * dA[2];
-      }
-    }
-    return total;
-  }
-
   private objectiveAndGradient(y: ReadonlyArray<number>, gradOut?: number[]): number {
     const vDim = this.vertexDim();
-    const epsArea = Math.max(1e-12, this.params.epsArea ?? 1e-8);
-    const lambdaReg = Math.max(0, this.params.lambdaReg);
-
-    if (gradOut) gradOut.fill(0);
-    let f = 0;
-
-    const positions: Vec3[] = this.x.map(() => [0, 0, 0]);
-    for (let i = 0; i < this.x.length; i++) {
-      const b = 3 * i;
-      positions[i][0] = y[b];
-      positions[i][1] = y[b + 1];
-      positions[i][2] = y[b + 2];
-    }
-
-    for (let i = 0; i < this.x.length; i++) {
-      const b = 3 * i;
-      const isHandle = this.handles.targets.has(i);
-      const w = isHandle ? this.params.wHandle : this.params.wFree;
-      const d = isHandle ? (this.handles.targets.get(i) as Vec3) : this.x0[i];
-      const dx = y[b] - d[0];
-      const dy = y[b + 1] - d[1];
-      const dz = y[b + 2] - d[2];
-      f += w * (dx * dx + dy * dy + dz * dz);
-      if (gradOut) {
-        gradOut[b] += 2 * w * dx;
-        gradOut[b + 1] += 2 * w * dy;
-        gradOut[b + 2] += 2 * w * dz;
-      }
-    }
-
-    if (lambdaReg > 0) {
-      const gradReg = gradOut ? positions.map(() => [0, 0, 0] as Vec3) : undefined;
-      const reg = this.regularityValueAndGradient(positions, epsArea, gradReg);
-      f += lambdaReg * reg;
-      if (gradOut && gradReg) {
-        for (let i = 0; i < gradReg.length; i++) {
-          const b = 3 * i;
-          gradOut[b] += lambdaReg * gradReg[i][0];
-          gradOut[b + 1] += lambdaReg * gradReg[i][1];
-          gradOut[b + 2] += lambdaReg * gradReg[i][2];
-        }
-      }
-    }
+    const f = evaluateVertexTrackingObjectiveAndGradient(
+      y,
+      {
+        baseline: this.x0,
+        handles: this.handles.targets,
+        wFree: this.params.wFree,
+        wHandle: this.params.wHandle,
+        lambdaReg: Math.max(0, this.params.lambdaReg),
+        epsArea: Math.max(1e-12, this.params.epsArea ?? 1e-8),
+        faces: this.faces,
+      },
+      gradOut
+    );
 
     // Objective does not depend on normal/offset variables.
     if (gradOut && gradOut.length > vDim) {
@@ -480,44 +359,8 @@ export class GuidedALMPlanarProjector implements IProjector {
     return f + 0.5 * rho * pen + 0.5 * proxWeight * proxV + 0.5 * proxNB;
   }
 
-  private solveCG(applyA: (p: number[]) => number[], b: number[], maxIters: number, tol: number): number[] {
-    const n = b.length;
-    const x = new Array<number>(n).fill(0);
-    let r = b.slice();
-    let p = r.slice();
-    let rr = dotN(r, r);
-    if (Math.sqrt(rr) <= tol) return x;
-
-    for (let it = 0; it < maxIters; it++) {
-      const Ap = applyA(p);
-      const pAp = Math.max(1e-20, dotN(p, Ap));
-      const alpha = rr / pAp;
-      for (let i = 0; i < n; i++) x[i] += alpha * p[i];
-      for (let i = 0; i < n; i++) r[i] -= alpha * Ap[i];
-      const rrNew = dotN(r, r);
-      if (Math.sqrt(rrNew) <= tol) break;
-      const beta = rrNew / Math.max(1e-20, rr);
-      for (let i = 0; i < n; i++) p[i] = r[i] + beta * p[i];
-      rr = rrNew;
-    }
-    return x;
-  }
-
   private computeTotalPlanarityViolation(positions: ReadonlyArray<Vec3>): number {
-    let total = 0;
-    for (let fi = 0; fi < this.faces.length; fi++) {
-      const f = this.faces[fi];
-      if (f.length < 3) continue;
-      const pts = f.map((vi) => positions[vi]);
-      const plane = bestFitPlanePCA(pts);
-      const n = plane.n;
-      const b = plane.b;
-      for (let k = 0; k < f.length; k++) {
-        const p = positions[f[k]];
-        total += Math.abs(n[0] * p[0] + n[1] * p[1] + n[2] * p[2] - b);
-      }
-    }
-    return total;
+    return sumSquaredPlanarityResidual(this.faces, positions);
   }
 
   step(iterations: number) {
@@ -605,7 +448,7 @@ export class GuidedALMPlanarProjector implements IProjector {
       };
 
       const b = rhs.map((r) => -r);
-      const delta = this.solveCG(applyA, b, cgIters, cgTol);
+      const delta = solveCG(applyA, b, cgIters, cgTol);
       const dirDeriv = dotN(rhs, delta);
 
       const psi0 = this.merit(y, rho, this.u, proxWeight, yRef, normalProxWeight, offsetProxWeight);

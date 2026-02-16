@@ -196,11 +196,11 @@ export function documentReducer(state: DocumentState, action: DocumentAction): D
   //   future: [],
   // });
 
-  const liveUpdate = (updates: Partial<Document>): DocumentState => ({
-  ...state,
-  present: { ...state.present, ...updates },
-  future: [],
-});
+  const liveUpdate = (updates: Partial<Document>, opts?: { clearFuture?: boolean }): DocumentState => ({
+    ...state,
+    present: { ...state.present, ...updates },
+    future: opts?.clearFuture === false ? state.future : [],
+  });
 
   switch (action.type) {
     case "UNDO": {
@@ -274,15 +274,15 @@ export function documentReducer(state: DocumentState, action: DocumentAction): D
     }
 
     case "SET_PROJECTION": {
-      return liveUpdate({ projection: { ...state.present.projection, ...action.patch } });
+      return liveUpdate({ projection: { ...state.present.projection, ...action.patch } }, { clearFuture: false });
     }
 
     case "SET_UI": {
-      return liveUpdate({ ui: { ...state.present.ui, ...action.patch } });
+      return liveUpdate({ ui: { ...state.present.ui, ...action.patch } }, { clearFuture: false });
     }
 
     case "SET_PRESET_ONLY": {
-      return liveUpdate({ preset: action.preset });
+      return liveUpdate({ preset: action.preset }, { clearFuture: false });
     }
 
     default:
