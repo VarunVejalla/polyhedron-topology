@@ -12,12 +12,22 @@ type HardProjectOptions = {
   tolPlanar: number;
 };
 
+type OptimizeOptions = {
+  maxOuterIters: number;
+  batchIters: number;
+  rho: number;
+  tolEq: number;
+  tolIneq: number;
+  stableFaceIndex: number;
+};
+
 type Props = {
   initialVertices: Vec3[];
   faces: number[][];
   method: ProjectionMethod;
   params: ProjectorParams;
   hardProject: HardProjectOptions;
+  optimize: OptimizeOptions;
   showAxes: boolean;
   showGrid: boolean;
   showNormals: boolean;
@@ -38,6 +48,7 @@ type Props = {
 
 export type PrismEditorHandle = {
   hardProject: () => void;
+  optimize: () => void;
   clearAllHandles: () => void;
   abortComputation: () => void;
   revertToBaseline: () => void;
@@ -54,6 +65,7 @@ export const PrismEditor = forwardRef<PrismEditorHandle, Props>(function PrismEd
     method,
     params,
     hardProject,
+    optimize,
     showAxes,
     showGrid,
     showNormals,
@@ -79,6 +91,7 @@ export const PrismEditor = forwardRef<PrismEditorHandle, Props>(function PrismEd
     hardProject.mode,
     hardProject.maxIters,
     hardProject.tolPlanar,
+    optimize,
     onCommitVertices,
     onStatus,
     onRunningChange
@@ -96,6 +109,7 @@ export const PrismEditor = forwardRef<PrismEditorHandle, Props>(function PrismEd
     ref,
     () => ({
       hardProject: () => interaction.hardProject(),
+      optimize: () => interaction.optimize(),
       clearAllHandles: () => interaction.clearAllHandles(),
       abortComputation: () => interaction.abortComputation(),
       revertToBaseline: () => interaction.revertToBaseline(),

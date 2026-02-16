@@ -40,6 +40,12 @@ type ProjectionState = {
   hardProjectMode: "iters" | "tol";
   hardProjectMaxIters: number;
   hardProjectTolPlanar: number;
+  optimizeMaxOuterIters: number;
+  optimizeBatchIters: number;
+  optimizeRho: number;
+  optimizeTolEq: number;
+  optimizeTolIneq: number;
+  optimizeStableFace: number;
 };
 
 type Document = {
@@ -162,6 +168,12 @@ export function createInitialState(): DocumentState {
       hardProjectMode: "iters",
       hardProjectMaxIters: 400,
       hardProjectTolPlanar: 1e-6,
+      optimizeMaxOuterIters: 80,
+      optimizeBatchIters: 2,
+      optimizeRho: 25,
+      optimizeTolEq: 1e-5,
+      optimizeTolIneq: 1e-5,
+      optimizeStableFace: 0,
     },
     ui: {
       leftWidth: 460,
