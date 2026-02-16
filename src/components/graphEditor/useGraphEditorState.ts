@@ -127,6 +127,19 @@ export function useGraphEditorState(opts: UseGraphEditorStateOpts) {
     }
   }, [polyFaces, selectedOuterFaceId]);
 
+  // External topology swaps (preset/build/dual-sync) should clear local editor interaction state.
+  useEffect(() => {
+    queueMicrotask(() => {
+      setSelectedNodes([]);
+      setSelectedEdgeId(null);
+      setPendingEdgeStart(null);
+      setEdgeCreateMode(false);
+      setDragging(null);
+      setPinned(new Set());
+      setSelectedOuterFaceId(null);
+    });
+  }, [topology.topologySig]);
+
   const setGraph = (next: SimpleGraph, commit: boolean) => {
     if (commit) {
       // Commit actions already update present state and push history.

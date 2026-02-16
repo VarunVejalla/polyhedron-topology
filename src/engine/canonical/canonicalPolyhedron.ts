@@ -100,12 +100,14 @@ export function buildCanonicalPolyhedron(input: CanonicalBuildInput, options: Ca
   });
 
   let it = 0;
+  let itersRan = 0;
   let maxEdgeErr = Infinity;
   let centroidNorm = Infinity;
   let maxPlanarity = Infinity;
 
   // Iterations
   for (it = 0; it < maxIters; it++) {
+    itersRan = it + 1;
     // --- (1) Edge tangency correction
     const tangencyPoints: Vec3[] = [];
     maxEdgeErr = 0;
@@ -172,7 +174,7 @@ export function buildCanonicalPolyhedron(input: CanonicalBuildInput, options: Ca
     vertices: V,
     faces,
     stats: {
-      iters: it + 1,
+      iters: itersRan,
       maxEdgeTangencyError: maxEdgeErr,
       centroidNorm,
       maxFacePlanarityRms: maxPlanarity,
