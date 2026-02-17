@@ -94,7 +94,6 @@ export function useThreePolyhedronScene(
     if (!mount) return;
 
     const X0 = initialVertices;
-    let currentX: Vec3[] = X0.map((p) => [p[0], p[1], p[2]] as Vec3);
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0xf6f6f6);
@@ -426,35 +425,13 @@ export function useThreePolyhedronScene(
 
       if (currentOverlayOptions.showNormals) {
         for (let fi = 0; fi < faces.length; fi++) {
-          const cyc = faces[fi];
-          if (cyc.length === 0) continue;
-          const c = [0, 0, 0] as Vec3;
-          for (let i = 0; i < cyc.length; i++) {
-            const p = currentX[cyc[i]];
-            c[0] += p[0];
-            c[1] += p[1];
-            c[2] += p[2];
-          }
-          c[0] /= cyc.length;
-          c[1] /= cyc.length;
-          c[2] /= cyc.length;
-
-          // Best effort normal from Newell-style sum on the polygon.
-          let nx = 0, ny = 0, nz = 0;
-          for (let i = 0; i < cyc.length; i++) {
-            const a = currentX[cyc[i]];
-            const b = currentX[cyc[(i + 1) % cyc.length]];
-            nx += (a[1] - b[1]) * (a[2] + b[2]);
-            ny += (a[2] - b[2]) * (a[0] + b[0]);
-            nz += (a[0] - b[0]) * (a[1] + b[1]);
-          }
-          const len = Math.hypot(nx, ny, nz);
+          const n = currentDerived.faceNormals[fi];
+          const c = currentDerived.faceCentroids[fi];
+          if (!n || !c) continue;
+          const len = Math.hypot(n[0], n[1], n[2]);
           if (len <= 1e-12) continue;
-          nx /= len;
-          ny /= len;
-          nz /= len;
 
-          const dir = new THREE.Vector3(nx, ny, nz);
+          const dir = new THREE.Vector3(n[0] / len, n[1] / len, n[2] / len);
           const origin = new THREE.Vector3(c[0], c[1], c[2]);
           const length = 0.28;
           const headLength = 0.08;
@@ -471,7 +448,6 @@ export function useThreePolyhedronScene(
 
     const syncSceneFromX = (X: ReadonlyArray<Vec3>) => {
       if (X.length !== n) return;
-      currentX = X.map((p) => [p[0], p[1], p[2]] as Vec3);
       writeTriPositions(X);
       (geom.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
       writeEdgePositions(X);

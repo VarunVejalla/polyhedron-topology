@@ -75,6 +75,8 @@ export type PolyDerivedCache = {
   unitNormalityMetric: number;
   convexityViolation: number;
   isConvex: boolean;
+  faceNormals: Vec3[];
+  faceCentroids: Vec3[];
   centerOfMass: Vec3;
   volume: number;
   projectedComByFace: Vec3[];

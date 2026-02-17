@@ -186,6 +186,8 @@ export function buildPolyDerivedCache(stateArg: PolyState | PolyRichState): Poly
   const { vertices, faces, facePlanes, aux } = rich;
 
   const light = computePolyLightConstraintMetrics(rich);
+  const faceNormals: Vec3[] = facePlanes.map((pl) => [pl.n[0], pl.n[1], pl.n[2]]);
+  const faceCentroids: Vec3[] = aux.faceCentroid.map((c) => [c[0], c[1], c[2]]);
   const centerOfMass: Vec3 = [aux.centerOfMass[0], aux.centerOfMass[1], aux.centerOfMass[2]];
   const volume = aux.volume;
   const projectedComByFace: Vec3[] = aux.projectedComByFace.map((p) => [p[0], p[1], p[2]] as Vec3);
@@ -278,6 +280,8 @@ export function buildPolyDerivedCache(stateArg: PolyState | PolyRichState): Poly
     unitNormalityMetric: light.unitNormalityMetric,
     convexityViolation: light.convexityViolation,
     isConvex: light.isConvex,
+    faceNormals,
+    faceCentroids,
     centerOfMass,
     volume,
     projectedComByFace,

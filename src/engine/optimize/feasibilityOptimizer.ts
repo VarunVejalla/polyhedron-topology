@@ -1,17 +1,37 @@
 import type { Vec3 } from "../math/types";
 import {
   buildPolyAuxState,
-  buildPolyTopology,
-  computeVolumeAndCenterOfMass,
+  buildPolyLightModelFromState,
+  lightBIndex,
+  lightFullDim,
+  lightNBase,
+  lightVertexDim,
+  readLightNormal,
+  readLightOffset,
+  readLightVertex,
   type PolyState,
   type PolyTopologyData,
+  unpackPolyLightState,
 } from "../poly";
-import { normN, solveCG } from "../projection/shared/numeric";
+import { LinearizedAlmEngine } from "../projection/modular/engines/linearizedAlmEngine";
+import {
+  createArmijoGlobalizer,
+  createResidualBalancePenaltyPolicy,
+  scaledDualUpdater,
+} from "../projection/modular/policies";
+import { runMetaSolver } from "../projection/modular/solver";
+import type { MetaModel, MetaModelBuilder, MetaState } from "../projection/modular/types";
+import { normN } from "../projection/shared/numeric";
 
 type SparseRow = {
   idx: number[];
   val: number[];
   c: number;
+};
+
+type ActivePieceProvider = {
+  getTargetAntiFaces: () => number[];
+  getActiveEdge: (fi: number) => number | undefined;
 };
 
 export type FeasibilityOptimizeParams = {
@@ -102,16 +122,331 @@ function pushSparseTriplet(row: SparseRow, idx: number, value: number) {
   row.val.push(value);
 }
 
+function rowDot(row: SparseRow, x: ReadonlyArray<number>): number {
+  let s = 0;
+  for (let i = 0; i < row.idx.length; i++) s += row.val[i] * x[row.idx[i]];
+  return s;
+}
+
+function rowsApplyJ(rows: ReadonlyArray<SparseRow>, v: ReadonlyArray<number>): number[] {
+  const out = new Array<number>(rows.length);
+  for (let i = 0; i < rows.length; i++) out[i] = rowDot(rows[i], v);
+  return out;
+}
+
+function rowsApplyJT(rows: ReadonlyArray<SparseRow>, w: ReadonlyArray<number>, dim: number): number[] {
+  const out = new Array<number>(dim).fill(0);
+  for (let i = 0; i < rows.length; i++) {
+    const wi = w[i];
+    if (wi === 0) continue;
+    const row = rows[i];
+    for (let j = 0; j < row.idx.length; j++) out[row.idx[j]] += wi * row.val[j];
+  }
+  return out;
+}
+
+function buildStateFromLightY(
+  y: ReadonlyArray<number>,
+  faces: ReadonlyArray<ReadonlyArray<number>>,
+  vertexCount: number
+): PolyState {
+  return unpackPolyLightState(y, faces, vertexCount);
+}
+
+function getUnitPlane(
+  y: ReadonlyArray<number>,
+  vertexCount: number,
+  fi: number
+): { n: Vec3; b: number } {
+  const nb = lightNBase(vertexCount, fi);
+  const nx = y[nb];
+  const ny = y[nb + 1];
+  const nz = y[nb + 2];
+  const len = Math.max(1e-12, Math.hypot(nx, ny, nz));
+  const inv = 1 / len;
+  return {
+    n: [nx * inv, ny * inv, nz * inv],
+    b: y[nb + 3] * inv,
+  };
+}
+
+function edgeMargin(
+  fi: number,
+  edgeIdx: number,
+  y: ReadonlyArray<number>,
+  faces: ReadonlyArray<ReadonlyArray<number>>,
+  vertexCount: number,
+  auxState: ReturnType<typeof buildPolyAuxState>
+): number {
+  const face = faces[fi];
+  if (face.length < 3) return Number.POSITIVE_INFINITY;
+  const n = getUnitPlane(y, vertexCount, fi).n;
+  const q = auxState.projectedComByFace[fi];
+  const faceC = auxState.faceCentroid[fi];
+
+  let orientSign = 1;
+  for (let i = 0; i < face.length; i++) {
+    const a = readLightVertex(y, face[i]);
+    const b = readLightVertex(y, face[(i + 1) % face.length]);
+    const e = sub3(b, a);
+    const s = dot3(cross3(e, sub3(faceC, a)), n);
+    if (Math.abs(s) > 1e-12) {
+      orientSign = s >= 0 ? 1 : -1;
+      break;
+    }
+  }
+
+  const a = readLightVertex(y, face[edgeIdx]);
+  const b = readLightVertex(y, face[(edgeIdx + 1) % face.length]);
+  const e = sub3(b, a);
+  const len = Math.max(1e-12, norm3(e));
+  const s = dot3(cross3(e, sub3(q, a)), n) / len;
+  return s * orientSign;
+}
+
+function antiResidual(
+  fi: number,
+  edgeIdx: number,
+  y: ReadonlyArray<number>,
+  faces: ReadonlyArray<ReadonlyArray<number>>,
+  vertexCount: number,
+  auxState: ReturnType<typeof buildPolyAuxState>,
+  antiMargin: number
+): number {
+  return edgeMargin(fi, edgeIdx, y, faces, vertexCount, auxState) + antiMargin;
+}
+
+class FeasibilityMetaModelBuilder implements MetaModelBuilder {
+  private faces: number[][];
+  private topology: PolyTopologyData;
+  private baselineVertices: Vec3[];
+  private paramsProvider: () => FeasibilityOptimizeParams;
+  private activePieces: ActivePieceProvider;
+
+  constructor(
+    faces: number[][],
+    topology: PolyTopologyData,
+    baselineVertices: Vec3[],
+    paramsProvider: () => FeasibilityOptimizeParams,
+    activePieces: ActivePieceProvider
+  ) {
+    this.faces = faces.map((f) => [...f]);
+    this.topology = topology;
+    this.baselineVertices = baselineVertices.map((p) => [p[0], p[1], p[2]]);
+    this.paramsProvider = paramsProvider;
+    this.activePieces = activePieces;
+  }
+
+  private vertexCount(): number {
+    return this.baselineVertices.length;
+  }
+
+  private vertexDim(): number {
+    return lightVertexDim(this.vertexCount());
+  }
+
+  private fullDim(): number {
+    return lightFullDim(this.vertexCount(), this.faces.length);
+  }
+
+  private buildAux(y: ReadonlyArray<number>) {
+    return buildPolyAuxState(
+      buildStateFromLightY(y, this.faces, this.vertexCount()),
+      this.topology
+    );
+  }
+
+  private buildEqRows(y: ReadonlyArray<number>, params: FeasibilityOptimizeParams): SparseRow[] {
+    const rows: SparseRow[] = [];
+
+    for (let i = 0; i < this.topology.incidencePairs.length; i++) {
+      const pair = this.topology.incidencePairs[i];
+      const vb = 3 * pair.vi;
+      const nb = lightNBase(this.vertexCount(), pair.fi);
+      const bb = lightBIndex(this.vertexCount(), pair.fi);
+      const c =
+        y[nb] * y[vb] +
+        y[nb + 1] * y[vb + 1] +
+        y[nb + 2] * y[vb + 2] -
+        y[bb];
+      const row: SparseRow = { idx: [], val: [], c };
+      pushSparseTriplet(row, vb, y[nb]);
+      pushSparseTriplet(row, vb + 1, y[nb + 1]);
+      pushSparseTriplet(row, vb + 2, y[nb + 2]);
+      pushSparseTriplet(row, nb, y[vb]);
+      pushSparseTriplet(row, nb + 1, y[vb + 1]);
+      pushSparseTriplet(row, nb + 2, y[vb + 2]);
+      pushSparseTriplet(row, bb, -1);
+      rows.push(row);
+    }
+
+    for (let fi = 0; fi < this.faces.length; fi++) {
+      const nb = lightNBase(this.vertexCount(), fi);
+      const c = y[nb] * y[nb] + y[nb + 1] * y[nb + 1] + y[nb + 2] * y[nb + 2] - 1;
+      const row: SparseRow = { idx: [], val: [], c };
+      pushSparseTriplet(row, nb, 2 * y[nb]);
+      pushSparseTriplet(row, nb + 1, 2 * y[nb + 1]);
+      pushSparseTriplet(row, nb + 2, 2 * y[nb + 2]);
+      rows.push(row);
+    }
+
+    const aux = this.buildAux(y);
+    const cVol = aux.volume - params.volumeTarget;
+    const rowVol: SparseRow = { idx: [], val: [], c: cVol };
+    const eps = 1e-6;
+    const yWork = y.slice();
+    for (let k = 0; k < this.vertexDim(); k++) {
+      const old = yWork[k];
+      yWork[k] = old + eps;
+      const vp = this.buildAux(yWork).volume;
+      yWork[k] = old - eps;
+      const vm = this.buildAux(yWork).volume;
+      yWork[k] = old;
+      pushSparseTriplet(rowVol, k, (vp - vm) / (2 * eps));
+    }
+    rows.push(rowVol);
+
+    return rows;
+  }
+
+  private buildIneqRows(y: ReadonlyArray<number>, params: FeasibilityOptimizeParams): SparseRow[] {
+    const rows: SparseRow[] = [];
+    const aux = this.buildAux(y);
+
+    for (let i = 0; i < this.topology.nonIncidencePairs.length; i++) {
+      const pair = this.topology.nonIncidencePairs[i];
+      const vb = 3 * pair.vi;
+      const nb = lightNBase(this.vertexCount(), pair.fi);
+      const bb = lightBIndex(this.vertexCount(), pair.fi);
+      const g =
+        y[nb] * y[vb] +
+        y[nb + 1] * y[vb + 1] +
+        y[nb + 2] * y[vb + 2] -
+        y[bb] +
+        params.convexityMargin;
+      const row: SparseRow = { idx: [], val: [], c: Math.max(0, g) };
+      if (g > 0) {
+        pushSparseTriplet(row, vb, y[nb]);
+        pushSparseTriplet(row, vb + 1, y[nb + 1]);
+        pushSparseTriplet(row, vb + 2, y[nb + 2]);
+        pushSparseTriplet(row, nb, y[vb]);
+        pushSparseTriplet(row, nb + 1, y[vb + 1]);
+        pushSparseTriplet(row, nb + 2, y[vb + 2]);
+        pushSparseTriplet(row, bb, -1);
+      }
+      rows.push(row);
+    }
+
+    const eps = 1e-6;
+    const yWork = y.slice();
+    const targetFaces = this.activePieces.getTargetAntiFaces();
+    for (let i = 0; i < targetFaces.length; i++) {
+      const fi = targetFaces[i];
+      const edgeIdx = this.activePieces.getActiveEdge(fi);
+      const row: SparseRow = { idx: [], val: [], c: 0 };
+      if (edgeIdx === undefined) {
+        rows.push(row);
+        continue;
+      }
+      const g = antiResidual(fi, edgeIdx, y, this.faces, this.vertexCount(), aux, params.antiMargin);
+      row.c = Math.max(0, g);
+      if (g > 0) {
+        for (let k = 0; k < this.vertexDim(); k++) {
+          const old = yWork[k];
+          yWork[k] = old + eps;
+          const gp = antiResidual(fi, edgeIdx, yWork, this.faces, this.vertexCount(), this.buildAux(yWork), params.antiMargin);
+          yWork[k] = old - eps;
+          const gm = antiResidual(fi, edgeIdx, yWork, this.faces, this.vertexCount(), this.buildAux(yWork), params.antiMargin);
+          yWork[k] = old;
+          pushSparseTriplet(row, k, (gp - gm) / (2 * eps));
+        }
+      }
+      rows.push(row);
+    }
+
+    return rows;
+  }
+
+  build(state: Readonly<MetaState>): MetaModel {
+    const y = state.y;
+    const params = this.paramsProvider();
+    const dim = this.fullDim();
+    const eqRows = this.buildEqRows(y, params);
+    const ineqRows = this.buildIneqRows(y, params);
+    const rows = [...eqRows, ...ineqRows];
+    const eqCount = eqRows.length;
+
+    const gradient = new Array<number>(dim).fill(0);
+    const moveW = Math.max(0, params.moveWeight);
+    for (let i = 0; i < this.baselineVertices.length; i++) {
+      const b = 3 * i;
+      const dx = y[b] - this.baselineVertices[i][0];
+      const dy = y[b + 1] - this.baselineVertices[i][1];
+      const dz = y[b + 2] - this.baselineVertices[i][2];
+      gradient[b] = 2 * moveW * dx;
+      gradient[b + 1] = 2 * moveW * dy;
+      gradient[b + 2] = 2 * moveW * dz;
+    }
+
+    const hDiag = new Array<number>(dim).fill(Math.max(1e-10, params.tau));
+    const moveDiag = Math.max(params.tau, 2 * moveW + params.tau);
+    for (let i = 0; i < this.vertexDim(); i++) hDiag[i] = moveDiag;
+
+    const evaluateRows = (yy: ReadonlyArray<number>): number[] => {
+      const eq = this.buildEqRows(yy, params).map((r) => r.c);
+      const ineq = this.buildIneqRows(yy, params).map((r) => r.c);
+      return [...eq, ...ineq];
+    };
+
+    const c0 = rows.map((r) => r.c);
+    return {
+      dim,
+      gradient,
+      hDiag,
+      hard: {
+        linearization: {
+          c0,
+          applyJ: (v) => rowsApplyJ(rows, v),
+          applyJT: (w) => rowsApplyJT(rows, w, dim),
+        },
+        evaluate: evaluateRows,
+      },
+      merit: (yy: ReadonlyArray<number>, u: ReadonlyArray<number>, rho: number) => {
+        let f = 0;
+        for (let i = 0; i < this.baselineVertices.length; i++) {
+          const b = 3 * i;
+          const dx = yy[b] - this.baselineVertices[i][0];
+          const dy = yy[b + 1] - this.baselineVertices[i][1];
+          const dz = yy[b + 2] - this.baselineVertices[i][2];
+          f += moveW * (dx * dx + dy * dy + dz * dz);
+        }
+        const c = evaluateRows(yy);
+        let penEq = 0;
+        let penIneq = 0;
+        for (let i = 0; i < c.length; i++) {
+          if (i < eqCount) {
+            const t = c[i] + u[i];
+            penEq += t * t;
+          } else {
+            penIneq += c[i] * c[i];
+          }
+        }
+        return f + 0.5 * rho * (penEq + penIneq);
+      },
+    };
+  }
+}
+
 export class FeasibilityOptimizerSession {
   private faces: number[][];
   private topology: PolyTopologyData;
   private params: FeasibilityOptimizeParams;
-
-  private y: number[] = [];
   private baselineVertices: Vec3[] = [];
-  private lambdaEq: number[] = [];
-  private rho: number;
   private iter = 0;
+
+  private state: MetaState = { y: [], u: [], rho: 1 };
+  private engine: LinearizedAlmEngine;
+  private builder: FeasibilityMetaModelBuilder;
 
   private targetAntiFaces: number[] = [];
   private stableFaceIndex = 0;
@@ -128,142 +463,57 @@ export class FeasibilityOptimizerSession {
   };
 
   constructor(state: PolyState, params?: Partial<FeasibilityOptimizeParams>) {
-    this.faces = state.faces.map((f) => [...f]);
-    this.topology = buildPolyTopology(this.faces, state.vertices.length);
+    const light = buildPolyLightModelFromState(state);
+    this.faces = light.state.faces.map((f) => [...f]);
+    this.topology = light.topology;
     this.params = { ...defaultParams, ...params };
-    this.rho = Math.max(this.params.rhoMin, Math.min(this.params.rhoMax, this.params.rho));
-    this.baselineVertices = state.vertices.map((p) => [p[0], p[1], p[2]] as Vec3);
+    this.baselineVertices = light.state.vertices.map((p) => [p[0], p[1], p[2]]);
     this.stableFaceIndex = this.resolveStableFaceIndex(this.params.stableFaceIndex);
-    this.y = this.packInitialState(state);
+    this.targetAntiFaces = this.faces.map((_f, fi) => fi).filter((fi) => fi !== this.stableFaceIndex);
+
+    this.state = {
+      y: new Array<number>(lightFullDim(this.baselineVertices.length, this.faces.length)).fill(0),
+      u: [],
+      rho: Math.max(this.params.rhoMin, Math.min(this.params.rhoMax, this.params.rho)),
+    };
+    for (let i = 0; i < this.baselineVertices.length; i++) {
+      const b = 3 * i;
+      this.state.y[b] = light.state.vertices[i][0];
+      this.state.y[b + 1] = light.state.vertices[i][1];
+      this.state.y[b + 2] = light.state.vertices[i][2];
+    }
+    for (let fi = 0; fi < this.faces.length; fi++) {
+      const nb = lightNBase(this.baselineVertices.length, fi);
+      this.state.y[nb] = light.state.facePlanes[fi].n[0];
+      this.state.y[nb + 1] = light.state.facePlanes[fi].n[1];
+      this.state.y[nb + 2] = light.state.facePlanes[fi].n[2];
+      this.state.y[nb + 3] = light.state.facePlanes[fi].b;
+    }
+
+    this.engine = new LinearizedAlmEngine({
+      cgIters: Math.max(8, this.params.cgIters),
+      cgTol: Math.max(1e-10, this.params.cgTol),
+    });
+    this.builder = new FeasibilityMetaModelBuilder(
+      this.faces,
+      this.topology,
+      this.baselineVertices,
+      () => this.params,
+      {
+        getTargetAntiFaces: () => this.targetAntiFaces,
+        getActiveEdge: (fi: number) => this.activeEdgeByFace.get(fi),
+      }
+    );
+
     this.refreshAntiPieces(true);
-    const eq = this.evalEqResiduals(this.y);
-    this.lambdaEq = new Array(eq.length).fill(0);
-    this.lastDiag = this.computeDiagnostics(this.y);
+    const eqCount = this.eqConstraintCount();
+    const ineqCount = this.ineqConstraintCount();
+    this.state.u = new Array(eqCount + ineqCount).fill(0);
+    this.lastDiag = this.computeDiagnostics(this.state.y);
   }
 
   private vertexCount(): number {
     return this.baselineVertices.length;
-  }
-
-  private faceCount(): number {
-    return this.faces.length;
-  }
-
-  private vertexDim(): number {
-    return 3 * this.vertexCount();
-  }
-
-  private fullDim(): number {
-    return this.vertexDim() + 4 * this.faceCount();
-  }
-
-  private nBase(fi: number): number {
-    return this.vertexDim() + 4 * fi;
-  }
-
-  private packInitialState(state: PolyState): number[] {
-    const dim = this.fullDim();
-    const y = new Array<number>(dim).fill(0);
-    for (let i = 0; i < state.vertices.length; i++) {
-      const b = 3 * i;
-      y[b] = state.vertices[i][0];
-      y[b + 1] = state.vertices[i][1];
-      y[b + 2] = state.vertices[i][2];
-    }
-    for (let fi = 0; fi < this.faces.length; fi++) {
-      const nb = this.nBase(fi);
-      const pl = state.facePlanes[fi];
-      y[nb] = pl.n[0];
-      y[nb + 1] = pl.n[1];
-      y[nb + 2] = pl.n[2];
-      y[nb + 3] = pl.b;
-    }
-    return y;
-  }
-
-  private unpackVertices(y: ReadonlyArray<number>): Vec3[] {
-    const out: Vec3[] = new Array(this.vertexCount());
-    for (let i = 0; i < this.vertexCount(); i++) {
-      const b = 3 * i;
-      out[i] = [y[b], y[b + 1], y[b + 2]];
-    }
-    return out;
-  }
-
-  private buildStateFromY(y: ReadonlyArray<number>): PolyState {
-    const vertices = this.unpackVertices(y);
-    const facePlanes = new Array(this.faceCount());
-    for (let fi = 0; fi < this.faceCount(); fi++) {
-      const nb = this.nBase(fi);
-      facePlanes[fi] = {
-        n: [y[nb], y[nb + 1], y[nb + 2]] as Vec3,
-        b: y[nb + 3],
-      };
-    }
-    return { vertices, faces: this.faces, facePlanes };
-  }
-
-  private getUnitPlane(fi: number, y: ReadonlyArray<number>): { n: Vec3; b: number } {
-    const nb = this.nBase(fi);
-    const nx = y[nb];
-    const ny = y[nb + 1];
-    const nz = y[nb + 2];
-    const nLen = Math.max(1e-12, Math.hypot(nx, ny, nz));
-    const inv = 1 / nLen;
-    const n: Vec3 = [nx * inv, ny * inv, nz * inv];
-    const b = y[nb + 3] * inv;
-    return { n, b };
-  }
-
-  private computeVolumeAndCom(y: ReadonlyArray<number>): { volume: number; centerOfMass: Vec3 } {
-    return computeVolumeAndCenterOfMass(this.buildStateFromY(y));
-  }
-
-  private edgeMargin(fi: number, edgeIdx: number, y: ReadonlyArray<number>, auxState?: ReturnType<typeof buildPolyAuxState>): number {
-    const face = this.faces[fi];
-    if (face.length < 3) return Number.POSITIVE_INFINITY;
-    const aux = auxState ?? buildPolyAuxState(this.buildStateFromY(y), this.topology);
-    const n = this.getUnitPlane(fi, y).n;
-    const q = aux.projectedComByFace[fi];
-
-    const faceC = aux.faceCentroid[fi];
-    let orientSign = 1;
-    for (let i = 0; i < face.length; i++) {
-      const aIdx = face[i];
-      const bIdx = face[(i + 1) % face.length];
-      const a: Vec3 = [y[3 * aIdx], y[3 * aIdx + 1], y[3 * aIdx + 2]];
-      const bb: Vec3 = [y[3 * bIdx], y[3 * bIdx + 1], y[3 * bIdx + 2]];
-      const e = sub3(bb, a);
-      const s = dot3(cross3(e, sub3(faceC, a)), n);
-      if (Math.abs(s) > 1e-12) {
-        orientSign = s >= 0 ? 1 : -1;
-        break;
-      }
-    }
-
-    const aIdx = face[edgeIdx];
-    const bIdx = face[(edgeIdx + 1) % face.length];
-    const a: Vec3 = [y[3 * aIdx], y[3 * aIdx + 1], y[3 * aIdx + 2]];
-    const bb: Vec3 = [y[3 * bIdx], y[3 * bIdx + 1], y[3 * bIdx + 2]];
-    const e = sub3(bb, a);
-    const len = Math.max(1e-12, norm3(e));
-    const s = dot3(cross3(e, sub3(q, a)), n) / len;
-    return s * orientSign;
-  }
-
-  private minFaceMargin(fi: number, y: ReadonlyArray<number>, auxState?: ReturnType<typeof buildPolyAuxState>): { edge: number; margin: number } {
-    const face = this.faces[fi];
-    if (face.length < 3) return { edge: -1, margin: Number.POSITIVE_INFINITY };
-    let bestEdge = 0;
-    let bestMargin = Number.POSITIVE_INFINITY;
-    for (let ei = 0; ei < face.length; ei++) {
-      const m = this.edgeMargin(fi, ei, y, auxState);
-      if (m < bestMargin) {
-        bestMargin = m;
-        bestEdge = ei;
-      }
-    }
-    return { edge: bestEdge, margin: bestMargin };
   }
 
   private resolveStableFaceIndex(candidate: number): number {
@@ -275,17 +525,29 @@ export class FeasibilityOptimizerSession {
     return idx;
   }
 
-  private refreshAntiPieces(force: boolean) {
-    const aux = buildPolyAuxState(this.buildStateFromY(this.y), this.topology);
-    const targets: number[] = [];
-    for (let fi = 0; fi < this.faces.length; fi++) {
-      if (fi === this.stableFaceIndex) continue;
-      targets.push(fi);
-    }
-    this.targetAntiFaces = targets;
+  private buildAux(y: ReadonlyArray<number>) {
+    return buildPolyAuxState(buildStateFromLightY(y, this.faces, this.vertexCount()), this.topology);
+  }
 
+  private minFaceMargin(fi: number, y: ReadonlyArray<number>, aux: ReturnType<typeof buildPolyAuxState>): { edge: number; margin: number } {
+    const face = this.faces[fi];
+    if (face.length < 3) return { edge: -1, margin: Number.POSITIVE_INFINITY };
+    let bestEdge = 0;
+    let bestMargin = Number.POSITIVE_INFINITY;
+    for (let ei = 0; ei < face.length; ei++) {
+      const m = edgeMargin(fi, ei, y, this.faces, this.vertexCount(), aux);
+      if (m < bestMargin) {
+        bestMargin = m;
+        bestEdge = ei;
+      }
+    }
+    return { edge: bestEdge, margin: bestMargin };
+  }
+
+  private refreshAntiPieces(force: boolean) {
+    const aux = this.buildAux(this.state.y);
     for (const fi of this.targetAntiFaces) {
-      const candidate = this.minFaceMargin(fi, this.y, aux);
+      const candidate = this.minFaceMargin(fi, this.state.y, aux);
       const curEdge = this.activeEdgeByFace.get(fi);
       const curDwell = this.dwellByFace.get(fi) ?? 0;
       if (force || curEdge === undefined) {
@@ -293,7 +555,7 @@ export class FeasibilityOptimizerSession {
         this.dwellByFace.set(fi, 0);
         continue;
       }
-      const curMargin = this.edgeMargin(fi, curEdge, this.y, aux);
+      const curMargin = edgeMargin(fi, curEdge, this.state.y, this.faces, this.vertexCount(), aux);
       const shouldSwitch =
         candidate.edge !== curEdge &&
         curDwell >= this.params.antiMinDwell &&
@@ -307,246 +569,79 @@ export class FeasibilityOptimizerSession {
     }
   }
 
-  private evalEqResiduals(y: ReadonlyArray<number>): number[] {
+  private eqConstraintCount(): number {
+    return this.topology.incidencePairs.length + this.faces.length + 1;
+  }
+
+  private ineqConstraintCount(): number {
+    return this.topology.nonIncidencePairs.length + this.targetAntiFaces.length;
+  }
+
+  private computeEqResiduals(y: ReadonlyArray<number>): number[] {
     const out: number[] = [];
     for (let i = 0; i < this.topology.incidencePairs.length; i++) {
-      const { fi, vi } = this.topology.incidencePairs[i];
-      const vb = 3 * vi;
-      const nb = this.nBase(fi);
-      const c =
-        y[nb] * y[vb] +
-        y[nb + 1] * y[vb + 1] +
-        y[nb + 2] * y[vb + 2] -
-        y[nb + 3];
-      out.push(c);
+      const pair = this.topology.incidencePairs[i];
+      const v = readLightVertex(y, pair.vi);
+      const n = readLightNormal(y, this.vertexCount(), pair.fi);
+      const b = readLightOffset(y, this.vertexCount(), pair.fi);
+      out.push(dot3(n, v) - b);
     }
     for (let fi = 0; fi < this.faces.length; fi++) {
-      const nb = this.nBase(fi);
-      const c = y[nb] * y[nb] + y[nb + 1] * y[nb + 1] + y[nb + 2] * y[nb + 2] - 1;
-      out.push(c);
+      const n = readLightNormal(y, this.vertexCount(), fi);
+      out.push(dot3(n, n) - 1);
     }
-    out.push(this.computeVolumeAndCom(y).volume - this.params.volumeTarget);
+    out.push(this.buildAux(y).volume - this.params.volumeTarget);
     return out;
   }
 
-  private buildEqRows(y: ReadonlyArray<number>): { rows: SparseRow[]; cEq: number[] } {
-    const rows: SparseRow[] = [];
-    const cEq: number[] = [];
-
-    for (let i = 0; i < this.topology.incidencePairs.length; i++) {
-      const { fi, vi } = this.topology.incidencePairs[i];
-      const vb = 3 * vi;
-      const nb = this.nBase(fi);
-      const c =
-        y[nb] * y[vb] +
-        y[nb + 1] * y[vb + 1] +
-        y[nb + 2] * y[vb + 2] -
-        y[nb + 3];
-      const row: SparseRow = { idx: [], val: [], c };
-      pushSparseTriplet(row, vb, y[nb]);
-      pushSparseTriplet(row, vb + 1, y[nb + 1]);
-      pushSparseTriplet(row, vb + 2, y[nb + 2]);
-      pushSparseTriplet(row, nb, y[vb]);
-      pushSparseTriplet(row, nb + 1, y[vb + 1]);
-      pushSparseTriplet(row, nb + 2, y[vb + 2]);
-      pushSparseTriplet(row, nb + 3, -1);
-      rows.push(row);
-      cEq.push(c);
-    }
-
-    for (let fi = 0; fi < this.faces.length; fi++) {
-      const nb = this.nBase(fi);
-      const c = y[nb] * y[nb] + y[nb + 1] * y[nb + 1] + y[nb + 2] * y[nb + 2] - 1;
-      const row: SparseRow = { idx: [], val: [], c };
-      pushSparseTriplet(row, nb, 2 * y[nb]);
-      pushSparseTriplet(row, nb + 1, 2 * y[nb + 1]);
-      pushSparseTriplet(row, nb + 2, 2 * y[nb + 2]);
-      rows.push(row);
-      cEq.push(c);
-    }
-
-    const vol = this.computeVolumeAndCom(y).volume;
-    const cVol = vol - this.params.volumeTarget;
-    const rowVol: SparseRow = { idx: [], val: [], c: cVol };
-    const eps = 1e-6;
-    const yWork = y.slice();
-    for (let k = 0; k < this.vertexDim(); k++) {
-      const old = yWork[k];
-      yWork[k] = old + eps;
-      const vp = this.computeVolumeAndCom(yWork).volume;
-      yWork[k] = old - eps;
-      const vm = this.computeVolumeAndCom(yWork).volume;
-      yWork[k] = old;
-      const g = (vp - vm) / (2 * eps);
-      pushSparseTriplet(rowVol, k, g);
-    }
-    rows.push(rowVol);
-    cEq.push(cVol);
-
-    return { rows, cEq };
-  }
-
-  private antiResidual(fi: number, edgeIdx: number, y: ReadonlyArray<number>, auxState?: ReturnType<typeof buildPolyAuxState>): number {
-    return this.edgeMargin(fi, edgeIdx, y, auxState) + this.params.antiMargin;
-  }
-
-  private buildIneqRows(y: ReadonlyArray<number>): {
-    rows: SparseRow[];
+  private computeIneqDiagnostics(y: ReadonlyArray<number>): {
     maxViolation: number;
     activeConvexityCount: number;
     activeAntiCount: number;
   } {
-    const rows: SparseRow[] = [];
+    const aux = this.buildAux(y);
     let maxViolation = 0;
     let activeConvexityCount = 0;
     let activeAntiCount = 0;
-    const aux = buildPolyAuxState(this.buildStateFromY(y), this.topology);
 
     for (let i = 0; i < this.topology.nonIncidencePairs.length; i++) {
-      const { fi, vi } = this.topology.nonIncidencePairs[i];
-      const vb = 3 * vi;
-      const nb = this.nBase(fi);
-      const g =
-        y[nb] * y[vb] +
-        y[nb + 1] * y[vb + 1] +
-        y[nb + 2] * y[vb + 2] -
-        y[nb + 3] +
-        this.params.convexityMargin;
-      if (g <= 0) continue;
-      const row: SparseRow = { idx: [], val: [], c: g };
-      pushSparseTriplet(row, vb, y[nb]);
-      pushSparseTriplet(row, vb + 1, y[nb + 1]);
-      pushSparseTriplet(row, vb + 2, y[nb + 2]);
-      pushSparseTriplet(row, nb, y[vb]);
-      pushSparseTriplet(row, nb + 1, y[vb + 1]);
-      pushSparseTriplet(row, nb + 2, y[vb + 2]);
-      pushSparseTriplet(row, nb + 3, -1);
-      rows.push(row);
-      activeConvexityCount++;
-      if (g > maxViolation) maxViolation = g;
+      const pair = this.topology.nonIncidencePairs[i];
+      const v = readLightVertex(y, pair.vi);
+      const n = readLightNormal(y, this.vertexCount(), pair.fi);
+      const b = readLightOffset(y, this.vertexCount(), pair.fi);
+      const g = dot3(n, v) - b + this.params.convexityMargin;
+      if (g > 0) {
+        activeConvexityCount++;
+        if (g > maxViolation) maxViolation = g;
+      }
     }
 
-    const eps = 1e-6;
-    const yWork = y.slice();
-    for (const fi of this.targetAntiFaces) {
+    for (let i = 0; i < this.targetAntiFaces.length; i++) {
+      const fi = this.targetAntiFaces[i];
       const edgeIdx = this.activeEdgeByFace.get(fi);
       if (edgeIdx === undefined) continue;
-      const g = this.antiResidual(fi, edgeIdx, y, aux);
-      if (g <= 0) continue;
-      const row: SparseRow = { idx: [], val: [], c: g };
-      for (let k = 0; k < this.vertexDim(); k++) {
-        const old = yWork[k];
-        yWork[k] = old + eps;
-        const gp = this.antiResidual(fi, edgeIdx, yWork);
-        yWork[k] = old - eps;
-        const gm = this.antiResidual(fi, edgeIdx, yWork);
-        yWork[k] = old;
-        const grad = (gp - gm) / (2 * eps);
-        pushSparseTriplet(row, k, grad);
-      }
-      rows.push(row);
-      activeAntiCount++;
-      if (g > maxViolation) maxViolation = g;
-    }
-
-    return { rows, maxViolation, activeConvexityCount, activeAntiCount };
-  }
-
-  private rowDot(row: SparseRow, x: ReadonlyArray<number>): number {
-    let s = 0;
-    for (let j = 0; j < row.idx.length; j++) s += row.val[j] * x[row.idx[j]];
-    return s;
-  }
-
-  private jtTimes(rows: ReadonlyArray<SparseRow>, coeffs: ReadonlyArray<number>): number[] {
-    const out = new Array<number>(this.fullDim()).fill(0);
-    for (let i = 0; i < rows.length; i++) {
-      const c = coeffs[i];
-      if (c === 0) continue;
-      const row = rows[i];
-      for (let j = 0; j < row.idx.length; j++) out[row.idx[j]] += c * row.val[j];
-    }
-    return out;
-  }
-
-  private applyA(
-    v: ReadonlyArray<number>,
-    hDiag: ReadonlyArray<number>,
-    eqRows: ReadonlyArray<SparseRow>,
-    ineqRows: ReadonlyArray<SparseRow>
-  ): number[] {
-    const out = new Array<number>(this.fullDim());
-    for (let i = 0; i < out.length; i++) out[i] = hDiag[i] * v[i];
-
-    for (let i = 0; i < eqRows.length; i++) {
-      const row = eqRows[i];
-      const s = this.rowDot(row, v);
-      const k = this.rho * s;
-      for (let j = 0; j < row.idx.length; j++) out[row.idx[j]] += k * row.val[j];
-    }
-    for (let i = 0; i < ineqRows.length; i++) {
-      const row = ineqRows[i];
-      const s = this.rowDot(row, v);
-      const k = this.rho * s;
-      for (let j = 0; j < row.idx.length; j++) out[row.idx[j]] += k * row.val[j];
-    }
-    return out;
-  }
-
-  private objectiveAndGradient(y: ReadonlyArray<number>, gradOut?: number[]): number {
-    const moveW = Math.max(0, this.params.moveWeight);
-    if (moveW <= 0) {
-      if (gradOut) for (let i = 0; i < gradOut.length; i++) gradOut[i] = 0;
-      return 0;
-    }
-
-    let f = 0;
-    if (gradOut) for (let i = 0; i < gradOut.length; i++) gradOut[i] = 0;
-    for (let i = 0; i < this.vertexCount(); i++) {
-      const b = 3 * i;
-      const dx = y[b] - this.baselineVertices[i][0];
-      const dy = y[b + 1] - this.baselineVertices[i][1];
-      const dz = y[b + 2] - this.baselineVertices[i][2];
-      f += moveW * (dx * dx + dy * dy + dz * dz);
-      if (gradOut) {
-        gradOut[b] += 2 * moveW * dx;
-        gradOut[b + 1] += 2 * moveW * dy;
-        gradOut[b + 2] += 2 * moveW * dz;
+      const g = antiResidual(fi, edgeIdx, y, this.faces, this.vertexCount(), aux, this.params.antiMargin);
+      if (g > 0) {
+        activeAntiCount++;
+        if (g > maxViolation) maxViolation = g;
       }
     }
-    return f;
-  }
 
-  private merit(y: ReadonlyArray<number>): number {
-    const eq = this.evalEqResiduals(y);
-    const { rows: ineqRows } = this.buildIneqRows(y);
-    const f = this.objectiveAndGradient(y);
-    let penEq = 0;
-    for (let i = 0; i < eq.length; i++) {
-      const t = eq[i] + this.lambdaEq[i] / this.rho;
-      penEq += t * t;
-    }
-    let penIneq = 0;
-    for (let i = 0; i < ineqRows.length; i++) penIneq += ineqRows[i].c * ineqRows[i].c;
-    return f + 0.5 * this.rho * (penEq + penIneq);
+    return { maxViolation, activeConvexityCount, activeAntiCount };
   }
 
   private computeDiagnostics(y: ReadonlyArray<number>): FeasibilityOptimizeDiagnostics {
-    const eq = this.evalEqResiduals(y);
-    const ineq = this.buildIneqRows(y);
-    const vol = this.computeVolumeAndCom(y).volume;
+    const eq = this.computeEqResiduals(y);
+    const ineq = this.computeIneqDiagnostics(y);
+    const volume = this.buildAux(y).volume;
     return {
       iter: this.iter,
       eqResidualL2: normN(eq),
       ineqViolationMax: ineq.maxViolation,
-      volume: vol,
+      volume,
       activeConvexityCount: ineq.activeConvexityCount,
       activeAntiCount: ineq.activeAntiCount,
     };
-  }
-
-  private clampRho(next: number): number {
-    return Math.max(this.params.rhoMin, Math.min(this.params.rhoMax, next));
   }
 
   private shouldStop(diag: FeasibilityOptimizeDiagnostics): boolean {
@@ -555,102 +650,64 @@ export class FeasibilityOptimizerSession {
 
   step(maxIters: number): boolean {
     const budget = Math.max(1, Math.floor(maxIters));
-    for (let local = 0; local < budget; local++) {
+    for (let k = 0; k < budget; k++) {
       if (this.iter >= this.params.maxOuterIters) return true;
       this.iter++;
       this.refreshAntiPieces(false);
 
-      const dim = this.fullDim();
-      const grad = new Array<number>(dim).fill(0);
-      this.objectiveAndGradient(this.y, grad);
+      this.engine.setParams({
+        cgIters: Math.max(8, this.params.cgIters),
+        cgTol: Math.max(1e-10, this.params.cgTol),
+      });
 
-      const hDiag = new Array<number>(dim).fill(this.params.tau);
-      const moveDiag = Math.max(this.params.tau, 2 * Math.max(0, this.params.moveWeight) + this.params.tau);
-      for (let i = 0; i < this.vertexDim(); i++) hDiag[i] = moveDiag;
+      const globalizer = createArmijoGlobalizer({
+        c1: 1e-4,
+        shrink: Math.min(0.95, Math.max(0.1, this.params.lineSearchShrink)),
+        maxSteps: Math.max(1, this.params.lineSearchMaxSteps),
+      });
+      const penaltyPolicy = createResidualBalancePenaltyPolicy({
+        enabled: this.params.adaptRho,
+        increase: Math.max(1.01, this.params.rhoIncrease),
+        decrease: Math.max(1.01, this.params.rhoDecrease),
+        ratio: Math.max(1.1, this.params.rhoResidualRatio),
+        min: Math.max(1e-8, this.params.rhoMin),
+        max: Math.max(Math.max(1e-8, this.params.rhoMin), this.params.rhoMax),
+      });
 
-      const { rows: eqRows, cEq } = this.buildEqRows(this.y);
-      if (this.lambdaEq.length !== eqRows.length) this.lambdaEq = new Array(eqRows.length).fill(0);
-      const { rows: ineqRows } = this.buildIneqRows(this.y);
+      const eqCount = this.eqConstraintCount();
+      const dualUpdate = {
+        update: (state: MetaState, cNew: ReadonlyArray<number>) => {
+          scaledDualUpdater.update(state, cNew);
+          for (let i = eqCount; i < state.u.length; i++) state.u[i] = 0;
+        },
+      };
 
-      const eqCoeff = new Array<number>(eqRows.length);
-      for (let i = 0; i < eqRows.length; i++) eqCoeff[i] = this.lambdaEq[i] + this.rho * cEq[i];
-      const gradEq = this.jtTimes(eqRows, eqCoeff);
-
-      const ineqCoeff = new Array<number>(ineqRows.length);
-      for (let i = 0; i < ineqRows.length; i++) ineqCoeff[i] = this.rho * ineqRows[i].c;
-      const gradIneq = this.jtTimes(ineqRows, ineqCoeff);
-
-      const rhs = new Array<number>(dim);
-      for (let i = 0; i < dim; i++) rhs[i] = grad[i] + gradEq[i] + gradIneq[i];
-
-      const b = rhs.map((r) => -r);
-      const delta = solveCG(
-        (v) => this.applyA(v, hDiag, eqRows, ineqRows),
-        b,
-        Math.max(8, this.params.cgIters),
-        Math.max(1e-10, this.params.cgTol)
+      const stats = runMetaSolver(
+        this.state,
+        this.builder,
+        this.engine,
+        globalizer,
+        dualUpdate,
+        penaltyPolicy,
+        undefined,
+        1
       );
 
-      const stepNorm = normN(delta);
-      if (!Number.isFinite(stepNorm) || stepNorm <= 1e-12) {
-        this.lastDiag = this.computeDiagnostics(this.y);
+      if (stats.accepted === 0 || stats.lastAlpha < this.params.minAcceptedAlpha) {
+        this.lastDiag = this.computeDiagnostics(this.state.y);
         return this.shouldStop(this.lastDiag) || this.iter >= this.params.maxOuterIters;
       }
 
-      const merit0 = this.merit(this.y);
-      let alpha = 1;
-      let accepted = false;
-      let nextY = this.y;
-      for (let ls = 0; ls < this.params.lineSearchMaxSteps; ls++) {
-        const trial = new Array<number>(dim);
-        for (let i = 0; i < dim; i++) trial[i] = this.y[i] + alpha * delta[i];
-        const mTrial = this.merit(trial);
-        if (mTrial <= merit0) {
-          nextY = trial;
-          accepted = true;
-          break;
-        }
-        alpha *= this.params.lineSearchShrink;
-      }
-      if (!accepted || alpha < this.params.minAcceptedAlpha) {
-        this.lastDiag = this.computeDiagnostics(this.y);
-        return this.shouldStop(this.lastDiag) || this.iter >= this.params.maxOuterIters;
-      }
-
-      const oldEq = this.evalEqResiduals(this.y);
-      this.y = nextY;
-      const newEq = this.evalEqResiduals(this.y);
-
-      for (let i = 0; i < this.lambdaEq.length; i++) this.lambdaEq[i] += this.rho * newEq[i];
-
-      if (this.params.adaptRho) {
-        const primal = normN(newEq);
-        const dEq = new Array<number>(newEq.length);
-        for (let i = 0; i < newEq.length; i++) dEq[i] = newEq[i] - oldEq[i];
-        const dual = this.rho * normN(this.jtTimes(eqRows, dEq));
-
-        let rhoNew = this.rho;
-        if (primal > this.params.rhoResidualRatio * dual) {
-          rhoNew = this.clampRho(this.rho * this.params.rhoIncrease);
-        } else if (dual > this.params.rhoResidualRatio * primal) {
-          rhoNew = this.clampRho(this.rho / this.params.rhoDecrease);
-        }
-
-        if (rhoNew !== this.rho) {
-          const scale = this.rho / rhoNew;
-          for (let i = 0; i < this.lambdaEq.length; i++) this.lambdaEq[i] *= scale;
-          this.rho = rhoNew;
-        }
-      }
-
-      this.lastDiag = this.computeDiagnostics(this.y);
+      this.lastDiag = this.computeDiagnostics(this.state.y);
       if (this.shouldStop(this.lastDiag)) return true;
     }
     return this.iter >= this.params.maxOuterIters || this.shouldStop(this.lastDiag);
   }
 
   getVertices(): Vec3[] {
-    return this.unpackVertices(this.y);
+    const out: Vec3[] = new Array(this.vertexCount());
+    for (let i = 0; i < this.vertexCount(); i++) out[i] = readLightVertex(this.state.y, i);
+    return out;
   }
 
   getDiagnostics(): FeasibilityOptimizeDiagnostics {

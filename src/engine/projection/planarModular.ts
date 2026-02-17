@@ -4,6 +4,7 @@ import { LinearizedAlmEngine } from "./modular/engines/linearizedAlmEngine";
 import {
   computeTotalPlanarityViolation,
   countPlanarGuidedHardConstraints,
+  type ModularConstraintMode,
   ModularGuidedALMParams,
   orientInitialNormalsOutward,
   packPlanarGuidedY,
@@ -36,6 +37,10 @@ export class ModularPlanarProjector implements IProjector {
   private builder: PlanarGuidedModelBuilder;
   private engine: LinearizedAlmEngine;
 
+  private mode(): ModularConstraintMode {
+    return this.params.constraintMode ?? "inc_unit";
+  }
+
   constructor(faces: number[][], x0: Vec3[], params: ModularProjectorParams) {
     this.faces = faces.map((f) => [...f]);
     this.params = { ...params };
@@ -48,7 +53,8 @@ export class ModularPlanarProjector implements IProjector {
       x0,
       this.params,
       this.handles,
-      () => this.stepYRef
+      () => this.stepYRef,
+      this.mode()
     );
     this.reset(x0);
   }
@@ -61,10 +67,10 @@ export class ModularPlanarProjector implements IProjector {
     this.normals = oriented.normals;
     this.offsets = oriented.offsets;
 
-    const y = packPlanarGuidedY(this.x, this.normals, this.offsets);
+    const y = packPlanarGuidedY(this.x, this.normals, this.offsets, this.mode(), this.faces);
     this.state = {
       y,
-      u: new Array<number>(countPlanarGuidedHardConstraints(this.faces)).fill(0),
+      u: new Array<number>(countPlanarGuidedHardConstraints(this.faces, this.x.length, this.mode())).fill(0),
       rho: this.params.rho,
     };
     this.stepYRef = y.slice();
@@ -82,13 +88,27 @@ export class ModularPlanarProjector implements IProjector {
   }
 
   setParams(next: Partial<ModularProjectorParams>) {
+    const prevMode = this.mode();
     this.params = { ...this.params, ...next };
     if (next.rho !== undefined) this.state.rho = next.rho;
+    const nextMode = this.mode();
+    if (prevMode !== nextMode) {
+      this.builder = new PlanarGuidedModelBuilder(
+        this.faces,
+        this.x0,
+        this.params,
+        this.handles,
+        () => this.stepYRef,
+        nextMode
+      );
+      this.reset(this.x0);
+      return;
+    }
     this.builder.setParams(next);
   }
 
   private syncStateToViews() {
-    const unpacked = unpackPlanarGuidedY(this.state.y, this.x0.length, this.faces.length);
+    const unpacked = unpackPlanarGuidedY(this.state.y, this.x0.length, this.faces.length, this.mode(), this.faces);
     this.x = unpacked.vertices;
     this.normals = unpacked.normals;
     this.offsets = unpacked.offsets;

@@ -2,8 +2,6 @@ import type { Vec3 } from "../math/types";
 import { ADMMPlanarProjector, ADMMParams } from "./planarAdmm";
 import { ADMMConvexPlanarProjector, ADMMConvexParams } from "./planarAdmmConvex";
 import { ADMMRegularPlanarProjector, ADMMRegularParams } from "./planarAdmmRegular";
-import { GuidedALMPlanarProjector, GuidedALMParams } from "./planarGuidedAlm";
-import { GuidedALMSquaredSlackPlanarProjector, GuidedALMSquaredSlackParams } from "./planarGuidedAlmSquaredSlack";
 import { ModularPlanarProjector, ModularProjectorParams } from "./planarModular";
 
 export type ProjectionMethod =
@@ -50,8 +48,6 @@ export interface IProjector {
       | ADMMParams
       | ADMMConvexParams
       | ADMMRegularParams
-      | GuidedALMParams
-      | GuidedALMSquaredSlackParams
       | ModularProjectorParams
   ): void;
 }
@@ -67,22 +63,24 @@ export function createProjector(method: ProjectionMethod, faces: number[][], x0:
     return new ADMMRegularPlanarProjector(faces, x0, p);
   }
   if (method === "guided_alm") {
-    const p: GuidedALMParams = {
+    const p: ModularProjectorParams = {
       rho: params.rho,
       wFree: params.wFree,
       wHandle: params.wHandle,
       lambdaReg: params.lambdaReg,
+      constraintMode: "inc_unit",
     };
-    return new GuidedALMPlanarProjector(faces, x0, p);
+    return new ModularPlanarProjector(faces, x0, p);
   }
   if (method === "guided_alm_squared_slack") {
-    const p: GuidedALMSquaredSlackParams = {
+    const p: ModularProjectorParams = {
       rho: params.rho,
       wFree: params.wFree,
       wHandle: params.wHandle,
       lambdaReg: params.lambdaReg,
+      constraintMode: "inc_noninc_unit_squared_slack",
     };
-    return new GuidedALMSquaredSlackPlanarProjector(faces, x0, p);
+    return new ModularPlanarProjector(faces, x0, p);
   }
   if (method === "guided_alm_modular") {
     const p: ModularProjectorParams = {

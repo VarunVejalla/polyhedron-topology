@@ -1,5 +1,16 @@
 import type { Vec3 } from "../../math/types";
 import { bestFitPlanePCA } from "../../geom/plane";
+import {
+  lightBIndex,
+  lightFullDim,
+  lightNBase,
+  lightVertexDim,
+  packPolyLightState,
+  readLightNormal,
+  readLightOffset,
+  readLightVertex,
+  type PolyState,
+} from "../../poly";
 import type { HandleSet } from "../index";
 import { sumSquaredPlanarityResidual } from "../shared/metrics";
 import { evaluateVertexTrackingObjectiveAndGradient } from "../shared/regularity";
@@ -8,6 +19,12 @@ import type { ConstraintLinearization, MetaModel, MetaModelBuilder, MetaState } 
 type Incidence = {
   fi: number;
   vi: number;
+};
+
+type NonIncidence = {
+  fi: number;
+  vi: number;
+  di: number;
 };
 
 type IncLinearized = {
@@ -19,13 +36,26 @@ type IncLinearized = {
   gB: number;
 };
 
+type NonIncLinearized = {
+  kind: "noninc";
+  fi: number;
+  vi: number;
+  di: number;
+  gV: Vec3;
+  gN: Vec3;
+  gB: number;
+  gD: number;
+};
+
 type UnitLinearized = {
   kind: "unit";
   fi: number;
   gN: Vec3;
 };
 
-type LinearizedRow = IncLinearized | UnitLinearized;
+type LinearizedRow = IncLinearized | NonIncLinearized | UnitLinearized;
+
+export type ModularConstraintMode = "inc_unit" | "inc_noninc_unit_squared_slack";
 
 export type ModularGuidedALMParams = {
   rho: number;
@@ -50,10 +80,54 @@ export type ModularGuidedALMParams = {
   offsetProxWeight?: number;
   minAcceptedAlpha?: number;
   constraintTol?: number;
+  constraintMode?: ModularConstraintMode;
 };
 
 function dot3(a: Vec3, b: Vec3): number {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+function buildIncidences(
+  faces: ReadonlyArray<ReadonlyArray<number>>
+): Incidence[] {
+  const out: Incidence[] = [];
+  for (let fi = 0; fi < faces.length; fi++) {
+    for (const vi of faces[fi]) out.push({ fi, vi });
+  }
+  return out;
+}
+
+function buildNonIncidences(
+  faces: ReadonlyArray<ReadonlyArray<number>>,
+  vertexCount: number
+): NonIncidence[] {
+  const out: NonIncidence[] = [];
+  for (let fi = 0; fi < faces.length; fi++) {
+    const s = new Set<number>(faces[fi]);
+    for (let vi = 0; vi < vertexCount; vi++) {
+      if (s.has(vi)) continue;
+      out.push({ fi, vi, di: out.length });
+    }
+  }
+  return out;
+}
+
+function initializeSquaredSlackValues(
+  baseY: ReadonlyArray<number>,
+  vertexCount: number,
+  nonIncidences: ReadonlyArray<NonIncidence>
+): number[] {
+  const d = new Array<number>(nonIncidences.length).fill(0);
+  for (let i = 0; i < nonIncidences.length; i++) {
+    const pair = nonIncidences[i];
+    const n = readLightNormal(baseY, vertexCount, pair.fi);
+    const b = readLightOffset(baseY, vertexCount, pair.fi);
+    const v = readLightVertex(baseY, pair.vi);
+    // Outward normals => convex side is n·v - b <= 0.
+    const gap = -(dot3(n, v) - b);
+    d[i] = Math.sqrt(Math.max(0, gap));
+  }
+  return d;
 }
 
 export function orientInitialNormalsOutward(faces: ReadonlyArray<ReadonlyArray<number>>, x: ReadonlyArray<Vec3>): { normals: Vec3[]; offsets: number[] } {
@@ -88,32 +162,52 @@ export function orientInitialNormalsOutward(faces: ReadonlyArray<ReadonlyArray<n
   return { normals, offsets };
 }
 
-export function countPlanarGuidedHardConstraints(faces: ReadonlyArray<ReadonlyArray<number>>): number {
-  let m = faces.length;
-  for (let fi = 0; fi < faces.length; fi++) m += faces[fi].length;
-  return m;
+export function countPlanarGuidedHardConstraints(
+  faces: ReadonlyArray<ReadonlyArray<number>>,
+  vertexCount: number,
+  mode: ModularConstraintMode
+): number {
+  const mInc = buildIncidences(faces).length;
+  if (mode === "inc_noninc_unit_squared_slack") {
+    return mInc + buildNonIncidences(faces, vertexCount).length + faces.length;
+  }
+  return mInc + faces.length;
 }
 
-export function packPlanarGuidedY(vertices: ReadonlyArray<Vec3>, normals: ReadonlyArray<Vec3>, offsets: ReadonlyArray<number>): number[] {
-  const out = new Array<number>(3 * vertices.length + 4 * normals.length);
-  for (let i = 0; i < vertices.length; i++) {
-    const b = 3 * i;
-    out[b] = vertices[i][0];
-    out[b + 1] = vertices[i][1];
-    out[b + 2] = vertices[i][2];
-  }
-  const nStart = 3 * vertices.length;
-  for (let fi = 0; fi < normals.length; fi++) {
-    const b = nStart + 4 * fi;
-    out[b] = normals[fi][0];
-    out[b + 1] = normals[fi][1];
-    out[b + 2] = normals[fi][2];
-    out[b + 3] = offsets[fi];
-  }
+export function packPlanarGuidedY(
+  vertices: ReadonlyArray<Vec3>,
+  normals: ReadonlyArray<Vec3>,
+  offsets: ReadonlyArray<number>,
+  mode: ModularConstraintMode,
+  faces: ReadonlyArray<ReadonlyArray<number>>,
+  initialD?: ReadonlyArray<number>
+): number[] {
+  const baseState: PolyState = {
+    vertices: vertices.map((p) => [p[0], p[1], p[2]]),
+    faces: faces.map((f) => [...f]),
+    facePlanes: normals.map((n, fi) => ({ n: [n[0], n[1], n[2]], b: offsets[fi] })),
+  };
+  const base = packPolyLightState(baseState);
+  if (mode !== "inc_noninc_unit_squared_slack") return base;
+
+  const nonInc = buildNonIncidences(faces, vertices.length);
+  const dVals = initialD
+    ? [...initialD]
+    : initializeSquaredSlackValues(base, vertices.length, nonInc);
+
+  const out = new Array<number>(base.length + nonInc.length);
+  for (let i = 0; i < base.length; i++) out[i] = base[i];
+  for (let i = 0; i < nonInc.length; i++) out[base.length + i] = dVals[i] ?? 0;
   return out;
 }
 
-export function unpackPlanarGuidedY(y: ReadonlyArray<number>, vertexCount: number, faceCount: number): { vertices: Vec3[]; normals: Vec3[]; offsets: number[] } {
+export function unpackPlanarGuidedY(
+  y: ReadonlyArray<number>,
+  vertexCount: number,
+  faceCount: number,
+  mode: ModularConstraintMode,
+  faces: ReadonlyArray<ReadonlyArray<number>>
+): { vertices: Vec3[]; normals: Vec3[]; offsets: number[]; d: number[] } {
   const vertices: Vec3[] = new Array(vertexCount);
   const normals: Vec3[] = new Array(faceCount);
   const offsets: number[] = new Array(faceCount);
@@ -121,13 +215,18 @@ export function unpackPlanarGuidedY(y: ReadonlyArray<number>, vertexCount: numbe
     const b = 3 * i;
     vertices[i] = [y[b], y[b + 1], y[b + 2]];
   }
-  const nStart = 3 * vertexCount;
   for (let fi = 0; fi < faceCount; fi++) {
-    const b = nStart + 4 * fi;
-    normals[fi] = [y[b], y[b + 1], y[b + 2]];
-    offsets[fi] = y[b + 3];
+    const nb = lightNBase(vertexCount, fi);
+    normals[fi] = [y[nb], y[nb + 1], y[nb + 2]];
+    offsets[fi] = y[nb + 3];
   }
-  return { vertices, normals, offsets };
+  const d: number[] = [];
+  if (mode === "inc_noninc_unit_squared_slack") {
+    const nonInc = buildNonIncidences(faces, vertexCount);
+    const base = lightFullDim(vertexCount, faceCount);
+    for (let i = 0; i < nonInc.length; i++) d.push(y[base + i] ?? 0);
+  }
+  return { vertices, normals, offsets, d };
 }
 
 export function computeTotalPlanarityViolation(
@@ -143,21 +242,25 @@ export class PlanarGuidedModelBuilder implements MetaModelBuilder {
   private params: ModularGuidedALMParams;
   private handles: HandleSet;
   private yRefProvider: () => ReadonlyArray<number>;
+  private mode: ModularConstraintMode;
   private incidences: Incidence[] = [];
+  private nonIncidences: NonIncidence[] = [];
 
   constructor(
     faces: number[][],
     x0: Vec3[],
     params: ModularGuidedALMParams,
     handles: HandleSet,
-    yRefProvider: () => ReadonlyArray<number>
+    yRefProvider: () => ReadonlyArray<number>,
+    mode: ModularConstraintMode
   ) {
     this.faces = faces.map((f) => [...f]);
     this.x0 = x0.map((p) => [p[0], p[1], p[2]]);
     this.params = { ...params };
     this.handles = handles;
     this.yRefProvider = yRefProvider;
-    this.buildIncidences();
+    this.mode = mode;
+    this.buildPairs();
   }
 
   setParams(next: Partial<ModularGuidedALMParams>) {
@@ -173,44 +276,43 @@ export class PlanarGuidedModelBuilder implements MetaModelBuilder {
   }
 
   hardConstraintCount(): number {
-    return this.incidences.length + this.faces.length;
+    return countPlanarGuidedHardConstraints(this.faces, this.x0.length, this.mode);
   }
 
-  private buildIncidences() {
-    this.incidences = [];
-    for (let fi = 0; fi < this.faces.length; fi++) {
-      for (const vi of this.faces[fi]) this.incidences.push({ fi, vi });
-    }
+  private buildPairs() {
+    this.incidences = buildIncidences(this.faces);
+    this.nonIncidences = this.mode === "inc_noninc_unit_squared_slack"
+      ? buildNonIncidences(this.faces, this.x0.length)
+      : [];
   }
 
   private vertexDim(): number {
-    return 3 * this.x0.length;
+    return lightVertexDim(this.x0.length);
+  }
+
+  private dBase(): number {
+    return lightFullDim(this.x0.length, this.faces.length);
   }
 
   private fullDim(): number {
-    return this.vertexDim() + 4 * this.faces.length;
+    return this.dBase() + this.nonIncidences.length;
   }
 
-  private nBase(fi: number): number {
-    return this.vertexDim() + 4 * fi;
-  }
-
-  private bIndex(fi: number): number {
-    return this.vertexDim() + 4 * fi + 3;
+  private dIndex(di: number): number {
+    return this.dBase() + di;
   }
 
   private linearizeConstraints(y: ReadonlyArray<number>): ConstraintLinearization {
     const mInc = this.incidences.length;
-    const rows: LinearizedRow[] = new Array(mInc + this.faces.length);
+    const mNon = this.nonIncidences.length;
+    const rows: LinearizedRow[] = new Array(mInc + mNon + this.faces.length);
     const c0 = new Array<number>(rows.length);
 
     for (let ri = 0; ri < mInc; ri++) {
       const { fi, vi } = this.incidences[ri];
-      const vb = 3 * vi;
-      const nb = this.nBase(fi);
-      const v: Vec3 = [y[vb], y[vb + 1], y[vb + 2]];
-      const n: Vec3 = [y[nb], y[nb + 1], y[nb + 2]];
-      const b = y[this.bIndex(fi)];
+      const v = readLightVertex(y, vi);
+      const n = readLightNormal(y, this.x0.length, fi);
+      const b = readLightOffset(y, this.x0.length, fi);
       rows[ri] = {
         kind: "inc",
         fi,
@@ -222,10 +324,30 @@ export class PlanarGuidedModelBuilder implements MetaModelBuilder {
       c0[ri] = dot3(n, v) - b;
     }
 
+    for (let qi = 0; qi < mNon; qi++) {
+      const rowIndex = mInc + qi;
+      const pair = this.nonIncidences[qi];
+      const v = readLightVertex(y, pair.vi);
+      const n = readLightNormal(y, this.x0.length, pair.fi);
+      const b = readLightOffset(y, this.x0.length, pair.fi);
+      const d = y[this.dIndex(pair.di)];
+      rows[rowIndex] = {
+        kind: "noninc",
+        fi: pair.fi,
+        vi: pair.vi,
+        di: pair.di,
+        gV: [n[0], n[1], n[2]],
+        gN: [v[0], v[1], v[2]],
+        gB: -1,
+        gD: 2 * d,
+      };
+      // Outward normals convexity: n·v - b = -d^2
+      c0[rowIndex] = dot3(n, v) - b + d * d;
+    }
+
     for (let fi = 0; fi < this.faces.length; fi++) {
-      const idx = mInc + fi;
-      const nb = this.nBase(fi);
-      const n: Vec3 = [y[nb], y[nb + 1], y[nb + 2]];
+      const idx = mInc + mNon + fi;
+      const n = readLightNormal(y, this.x0.length, fi);
       rows[idx] = { kind: "unit", fi, gN: [2 * n[0], 2 * n[1], 2 * n[2]] };
       c0[idx] = dot3(n, n) - 1;
     }
@@ -236,13 +358,21 @@ export class PlanarGuidedModelBuilder implements MetaModelBuilder {
         const r = rows[i];
         if (r.kind === "inc") {
           const vb = 3 * r.vi;
-          const nb = this.nBase(r.fi);
+          const nb = lightNBase(this.x0.length, r.fi);
           out[i] =
             r.gV[0] * v[vb] + r.gV[1] * v[vb + 1] + r.gV[2] * v[vb + 2] +
             r.gN[0] * v[nb] + r.gN[1] * v[nb + 1] + r.gN[2] * v[nb + 2] +
-            r.gB * v[nb + 3];
+            r.gB * v[lightBIndex(this.x0.length, r.fi)];
+        } else if (r.kind === "noninc") {
+          const vb = 3 * r.vi;
+          const nb = lightNBase(this.x0.length, r.fi);
+          out[i] =
+            r.gV[0] * v[vb] + r.gV[1] * v[vb + 1] + r.gV[2] * v[vb + 2] +
+            r.gN[0] * v[nb] + r.gN[1] * v[nb + 1] + r.gN[2] * v[nb + 2] +
+            r.gB * v[lightBIndex(this.x0.length, r.fi)] +
+            r.gD * v[this.dIndex(r.di)];
         } else {
-          const nb = this.nBase(r.fi);
+          const nb = lightNBase(this.x0.length, r.fi);
           out[i] = r.gN[0] * v[nb] + r.gN[1] * v[nb + 1] + r.gN[2] * v[nb + 2];
         }
       }
@@ -256,16 +386,29 @@ export class PlanarGuidedModelBuilder implements MetaModelBuilder {
         const r = rows[i];
         if (r.kind === "inc") {
           const vb = 3 * r.vi;
-          const nb = this.nBase(r.fi);
+          const nb = lightNBase(this.x0.length, r.fi);
+          const bb = lightBIndex(this.x0.length, r.fi);
           out[vb] += wi * r.gV[0];
           out[vb + 1] += wi * r.gV[1];
           out[vb + 2] += wi * r.gV[2];
           out[nb] += wi * r.gN[0];
           out[nb + 1] += wi * r.gN[1];
           out[nb + 2] += wi * r.gN[2];
-          out[nb + 3] += wi * r.gB;
+          out[bb] += wi * r.gB;
+        } else if (r.kind === "noninc") {
+          const vb = 3 * r.vi;
+          const nb = lightNBase(this.x0.length, r.fi);
+          const bb = lightBIndex(this.x0.length, r.fi);
+          out[vb] += wi * r.gV[0];
+          out[vb + 1] += wi * r.gV[1];
+          out[vb + 2] += wi * r.gV[2];
+          out[nb] += wi * r.gN[0];
+          out[nb + 1] += wi * r.gN[1];
+          out[nb + 2] += wi * r.gN[2];
+          out[bb] += wi * r.gB;
+          out[this.dIndex(r.di)] += wi * r.gD;
         } else {
-          const nb = this.nBase(r.fi);
+          const nb = lightNBase(this.x0.length, r.fi);
           out[nb] += wi * r.gN[0];
           out[nb + 1] += wi * r.gN[1];
           out[nb + 2] += wi * r.gN[2];
@@ -279,25 +422,32 @@ export class PlanarGuidedModelBuilder implements MetaModelBuilder {
 
   private evalConstraintsOnly(y: ReadonlyArray<number>): number[] {
     const mInc = this.incidences.length;
-    const out = new Array<number>(mInc + this.faces.length);
+    const mNon = this.nonIncidences.length;
+    const out = new Array<number>(mInc + mNon + this.faces.length);
     for (let ri = 0; ri < mInc; ri++) {
       const { fi, vi } = this.incidences[ri];
-      const vb = 3 * vi;
-      const nb = this.nBase(fi);
-      const v: Vec3 = [y[vb], y[vb + 1], y[vb + 2]];
-      const n: Vec3 = [y[nb], y[nb + 1], y[nb + 2]];
-      out[ri] = dot3(n, v) - y[this.bIndex(fi)];
+      const v = readLightVertex(y, vi);
+      const n = readLightNormal(y, this.x0.length, fi);
+      out[ri] = dot3(n, v) - readLightOffset(y, this.x0.length, fi);
+    }
+    for (let qi = 0; qi < mNon; qi++) {
+      const rowIndex = mInc + qi;
+      const pair = this.nonIncidences[qi];
+      const v = readLightVertex(y, pair.vi);
+      const n = readLightNormal(y, this.x0.length, pair.fi);
+      const b = readLightOffset(y, this.x0.length, pair.fi);
+      const d = y[this.dIndex(pair.di)];
+      out[rowIndex] = dot3(n, v) - b + d * d;
     }
     for (let fi = 0; fi < this.faces.length; fi++) {
-      const nb = this.nBase(fi);
-      const n: Vec3 = [y[nb], y[nb + 1], y[nb + 2]];
-      out[mInc + fi] = dot3(n, n) - 1;
+      const n = readLightNormal(y, this.x0.length, fi);
+      out[mInc + mNon + fi] = dot3(n, n) - 1;
     }
     return out;
   }
 
   private objectiveAndGradient(y: ReadonlyArray<number>, gradOut?: number[]): number {
-    return evaluateVertexTrackingObjectiveAndGradient(
+    const f = evaluateVertexTrackingObjectiveAndGradient(
       y,
       {
         baseline: this.x0,
@@ -310,10 +460,14 @@ export class PlanarGuidedModelBuilder implements MetaModelBuilder {
       },
       gradOut
     );
+    if (gradOut) {
+      for (let i = this.vertexDim(); i < gradOut.length; i++) gradOut[i] = 0;
+    }
+    return f;
   }
 
-  build(state: Readonly<MetaState>): MetaModel {
-    const y = state.y;
+  build(_state: Readonly<MetaState>): MetaModel {
+    const y = _state.y;
     const yRef = this.yRefProvider();
     const dim = this.fullDim();
     const tau = Math.max(1e-10, this.params.tau ?? 1e-6);
@@ -335,7 +489,7 @@ export class PlanarGuidedModelBuilder implements MetaModelBuilder {
 
     if (normalProxWeight > 0 || offsetProxWeight > 0) {
       for (let fi = 0; fi < this.faces.length; fi++) {
-        const nb = this.nBase(fi);
+        const nb = lightNBase(this.x0.length, fi);
         gradient[nb] += normalProxWeight * (y[nb] - yRef[nb]);
         gradient[nb + 1] += normalProxWeight * (y[nb + 1] - yRef[nb + 1]);
         gradient[nb + 2] += normalProxWeight * (y[nb + 2] - yRef[nb + 2]);
@@ -354,7 +508,7 @@ export class PlanarGuidedModelBuilder implements MetaModelBuilder {
       hDiag[b + 2] = val;
     }
     for (let fi = 0; fi < this.faces.length; fi++) {
-      const nb = this.nBase(fi);
+      const nb = lightNBase(this.x0.length, fi);
       hDiag[nb] += normalProxWeight;
       hDiag[nb + 1] += normalProxWeight;
       hDiag[nb + 2] += normalProxWeight;
@@ -393,7 +547,7 @@ export class PlanarGuidedModelBuilder implements MetaModelBuilder {
         let proxNB = 0;
         if (normalProxWeight > 0 || offsetProxWeight > 0) {
           for (let fi = 0; fi < this.faces.length; fi++) {
-            const nb = this.nBase(fi);
+            const nb = lightNBase(this.x0.length, fi);
             const dnx = yy[nb] - yRef[nb];
             const dny = yy[nb + 1] - yRef[nb + 1];
             const dnz = yy[nb + 2] - yRef[nb + 2];
@@ -408,4 +562,3 @@ export class PlanarGuidedModelBuilder implements MetaModelBuilder {
     };
   }
 }
-

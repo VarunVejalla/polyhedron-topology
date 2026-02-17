@@ -11,7 +11,22 @@ export type {
   RollStep,
 } from "./types";
 export { buildPolyState, computeFacePlanes } from "./state";
-export { buildPolyLightModel, computePolyLightConstraintMetrics, type PolyLightModel, type PolyLightConstraintMetrics } from "./light";
+export {
+  buildPolyLightModel,
+  buildPolyLightModelFromState,
+  computePolyLightConstraintMetrics,
+  lightVertexDim,
+  lightFullDim,
+  lightNBase,
+  lightBIndex,
+  readLightVertex,
+  readLightNormal,
+  readLightOffset,
+  packPolyLightState,
+  unpackPolyLightState,
+  type PolyLightModel,
+  type PolyLightConstraintMetrics,
+} from "./light";
 export { buildPolyDerivedCache } from "./derive";
 export { buildPolyTopology } from "./topology";
 export { buildPolyAuxState, buildPolyRichState, computeVolumeAndCenterOfMass } from "./auxiliary";
