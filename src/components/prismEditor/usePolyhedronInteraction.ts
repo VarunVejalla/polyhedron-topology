@@ -1,13 +1,8 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import type { Vec3 } from "../../engine/math/types";
-import { createFeasibilityOptimizerSession } from "../../engine/optimize";
 import type { OverlayOptions, ProjectionControllerAPI, ThreeSceneAPI } from "./types";
 
-/**
- * Owns all pointer interaction and long-running projection actions.
- * Event listeners remain stable during drag.
- */
 export function usePolyhedronInteraction(
   scene: ThreeSceneAPI | null,
   controller: ProjectionControllerAPI,
@@ -15,14 +10,6 @@ export function usePolyhedronInteraction(
   hardProjectMode: "iters" | "tol",
   hardProjectMaxIters: number,
   hardProjectTolPlanar: number,
-  optimizeOptions: {
-    maxOuterIters: number;
-    batchIters: number;
-    rho: number;
-    tolEq: number;
-    tolIneq: number;
-    stableFaceIndex: number;
-  },
   onCommitVertices?: (verts: Vec3[]) => void,
   onStatus?: (s: {
     totalPlanarityViolation: number;
@@ -42,7 +29,6 @@ export function usePolyhedronInteraction(
     hardProjectMode,
     hardProjectMaxIters,
     hardProjectTolPlanar,
-    optimizeOptions,
   });
 
   useEffect(() => {
@@ -55,9 +41,8 @@ export function usePolyhedronInteraction(
       hardProjectMode,
       hardProjectMaxIters,
       hardProjectTolPlanar,
-      optimizeOptions,
     };
-  }, [controller, onCommitVertices, onStatus, onRunningChange, overlayOptions, hardProjectMode, hardProjectMaxIters, hardProjectTolPlanar, optimizeOptions]);
+  }, [controller, onCommitVertices, onStatus, onRunningChange, overlayOptions, hardProjectMode, hardProjectMaxIters, hardProjectTolPlanar]);
 
   useEffect(() => {
     if (!scene) return;
@@ -68,7 +53,6 @@ export function usePolyhedronInteraction(
   const abortRequestedRef = useRef(false);
 
   const hardProjectRef = useRef<() => void>(() => {});
-  const optimizeRef = useRef<() => void>(() => {});
   const clearAllHandlesRef = useRef<() => void>(() => {});
   const abortComputationRef = useRef<() => void>(() => {});
   const revertToBaselineRef = useRef<() => void>(() => {});
@@ -138,12 +122,12 @@ export function usePolyhedronInteraction(
       syncFromController();
     };
 
-    const commit = () => {
+    const commit = (syncAfterCommit: boolean) => {
       const c = stateRef.current.controller;
       const snap = c.snapshot();
       c.commitBaseline(snap);
       stateRef.current.onCommitVertices?.(snap);
-      syncFromController();
+      if (syncAfterCommit) syncFromController();
     };
 
     const clearAllHandles = () => {
@@ -196,7 +180,7 @@ export function usePolyhedronInteraction(
         const remaining = maxIters - it;
         if (remaining <= 0) {
           cancelRunTimer();
-          commit();
+          commit(false);
           setRunning(false);
           return;
         }
@@ -205,14 +189,11 @@ export function usePolyhedronInteraction(
         applyProjection(batch);
         it += batch;
 
-        if (mode === "tol") {
-          const c = stateRef.current.controller;
-          if (c.diagnostics().totalPlanarityViolation <= tol) {
-            cancelRunTimer();
-            commit();
-            setRunning(false);
-            return;
-          }
+        if (mode === "tol" && stateRef.current.controller.diagnostics().totalPlanarityViolation <= tol) {
+          cancelRunTimer();
+          commit(false);
+          setRunning(false);
+          return;
         }
 
         runTimer = window.setTimeout(stepBatch, 0);
@@ -221,66 +202,6 @@ export function usePolyhedronInteraction(
       stepBatch();
     };
     hardProjectRef.current = hardProject;
-
-    const optimize = () => {
-      if (runningRef.current) return;
-      setRunning(true);
-      abortRequestedRef.current = false;
-
-      const runController = stateRef.current.controller;
-      const startBaseline = runController.getBaselineSnapshot();
-      runController.clearAllHandles();
-
-      const opts = stateRef.current.optimizeOptions;
-      const session = createFeasibilityOptimizerSession(runController.getPolyRichState(), {
-        rho: Math.max(1e-6, opts.rho),
-        maxOuterIters: Math.max(1, Math.floor(opts.maxOuterIters)),
-        tolEq: Math.max(0, opts.tolEq),
-        tolIneq: Math.max(0, opts.tolIneq),
-        stableFaceIndex: Math.max(0, Math.floor(opts.stableFaceIndex)),
-      });
-      let outerDone = 0;
-      const batch = Math.max(1, Math.floor(opts.batchIters));
-
-      const stepBatch = () => {
-        if (disposed) return;
-        if (stateRef.current.controller !== runController) {
-          cancelRunTimer();
-          setRunning(false);
-          return;
-        }
-
-        if (abortRequestedRef.current) {
-          abortRequestedRef.current = false;
-          cancelRunTimer();
-          runController.commitBaseline(startBaseline);
-          syncFromController();
-          setRunning(false);
-          return;
-        }
-
-        const done = session.step(batch);
-        outerDone += batch;
-
-        runController.commitBaseline(session.getVertices());
-        syncFromController();
-
-        const reachedBudget = outerDone >= Math.max(1, Math.floor(opts.maxOuterIters));
-        if (done || reachedBudget) {
-          cancelRunTimer();
-          const snap = runController.snapshot();
-          stateRef.current.onCommitVertices?.(snap);
-          syncFromController();
-          setRunning(false);
-          return;
-        }
-
-        runTimer = window.setTimeout(stepBatch, 0);
-      };
-
-      stepBatch();
-    };
-    optimizeRef.current = optimize;
 
     const onContextMenu = (e: MouseEvent) => e.preventDefault();
     renderer.domElement.addEventListener("contextmenu", onContextMenu);
@@ -366,7 +287,7 @@ export function usePolyhedronInteraction(
 
       const c = stateRef.current.controller;
       applyProjection(c.getParams().itersOnRelease);
-      commit();
+      commit(false);
     };
 
     renderer.domElement.addEventListener("pointerdown", onPointerDown);
@@ -388,7 +309,6 @@ export function usePolyhedronInteraction(
 
   return {
     hardProject: () => hardProjectRef.current(),
-    optimize: () => optimizeRef.current(),
     clearAllHandles: () => clearAllHandlesRef.current(),
     abortComputation: () => abortComputationRef.current(),
     revertToBaseline: () => revertToBaselineRef.current(),

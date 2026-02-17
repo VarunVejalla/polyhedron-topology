@@ -325,104 +325,6 @@ export default function App() {
               />
             </label>
 
-            <label className="toolbarField">
-              optimize max iters
-              <input
-                type="number"
-                min={1}
-                step={1}
-                value={doc.projection.optimizeMaxOuterIters}
-                onChange={(e) =>
-                  dispatch({
-                    type: "SET_PROJECTION",
-                    patch: { optimizeMaxOuterIters: Math.max(1, Number(e.target.value)) },
-                  })
-                }
-              />
-            </label>
-
-            <label className="toolbarField">
-              optimize batch
-              <input
-                type="number"
-                min={1}
-                step={1}
-                value={doc.projection.optimizeBatchIters}
-                onChange={(e) =>
-                  dispatch({
-                    type: "SET_PROJECTION",
-                    patch: { optimizeBatchIters: Math.max(1, Number(e.target.value)) },
-                  })
-                }
-              />
-            </label>
-
-            <label className="toolbarField">
-              optimize rho
-              <input
-                type="number"
-                min={1e-8}
-                step="any"
-                value={doc.projection.optimizeRho}
-                onChange={(e) =>
-                  dispatch({
-                    type: "SET_PROJECTION",
-                    patch: { optimizeRho: Math.max(1e-8, Number(e.target.value)) },
-                  })
-                }
-              />
-            </label>
-
-            <label className="toolbarField">
-              optimize tol eq
-              <input
-                type="number"
-                min={0}
-                step="any"
-                value={doc.projection.optimizeTolEq}
-                onChange={(e) =>
-                  dispatch({
-                    type: "SET_PROJECTION",
-                    patch: { optimizeTolEq: Math.max(0, Number(e.target.value)) },
-                  })
-                }
-              />
-            </label>
-
-            <label className="toolbarField">
-              optimize tol ineq
-              <input
-                type="number"
-                min={0}
-                step="any"
-                value={doc.projection.optimizeTolIneq}
-                onChange={(e) =>
-                  dispatch({
-                    type: "SET_PROJECTION",
-                    patch: { optimizeTolIneq: Math.max(0, Number(e.target.value)) },
-                  })
-                }
-              />
-            </label>
-
-            <label className="toolbarField">
-              optimize stable face (index)
-              <input
-                type="number"
-                min={0}
-                max={Math.max(0, doc.poly.faces.length - 1)}
-                step={1}
-                value={doc.projection.optimizeStableFace}
-                onChange={(e) =>
-                  dispatch({
-                    type: "SET_PROJECTION",
-                    patch: {
-                      optimizeStableFace: Math.max(0, Math.min(Math.max(0, doc.poly.faces.length - 1), Math.floor(Number(e.target.value)))),
-                    },
-                  })
-                }
-              />
-            </label>
           </div>
         </div>
       )}
@@ -473,14 +375,6 @@ export default function App() {
                 maxIters: doc.projection.hardProjectMaxIters,
                 tolPlanar: doc.projection.hardProjectTolPlanar,
               }}
-              optimize={{
-                maxOuterIters: doc.projection.optimizeMaxOuterIters,
-                batchIters: doc.projection.optimizeBatchIters,
-                rho: doc.projection.optimizeRho,
-                tolEq: doc.projection.optimizeTolEq,
-                tolIneq: doc.projection.optimizeTolIneq,
-                stableFaceIndex: doc.projection.optimizeStableFace,
-              }}
               showAxes={doc.ui.showAxes}
               showGrid={doc.ui.showGrid}
               showNormals={doc.ui.showNormals}
@@ -517,9 +411,6 @@ export default function App() {
               </button>
               <button className="uiButton" onClick={() => prismRef.current?.hardProject()} disabled={isComputing}>
                 Hard project
-              </button>
-              <button className="uiButton" onClick={() => prismRef.current?.optimize()} disabled={isComputing}>
-                Optimize
               </button>
               <button className={`uiButton ${doc.ui.showAxes ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showAxes")} disabled={isComputing}>
                 Axes

@@ -1,8 +1,5 @@
 import type { Vec3 } from "../math/types";
-import { ADMMPlanarProjector, ADMMParams } from "./planarAdmm";
-import { ADMMConvexPlanarProjector, ADMMConvexParams } from "./planarAdmmConvex";
-import { ADMMRegularPlanarProjector, ADMMRegularParams } from "./planarAdmmRegular";
-import { ModularPlanarProjector, ModularProjectorParams } from "./planarModular";
+import { PlanarProjector } from "./planarOptimizer";
 
 export type ProjectionMethod =
   | "admm"
@@ -12,13 +9,15 @@ export type ProjectionMethod =
   | "guided_alm_squared_slack"
   | "guided_alm_modular";
 
+export type ProjectionFlavor = "planar" | "convex" | "regular";
+
 export const projectionMethods: { id: ProjectionMethod; label: string }[] = [
-  { id: "admm", label: "ADMM / prox (planar faces)" },
-  { id: "admm_convex", label: "ADMM / prox (planar + convex)" },
-  { id: "admm_regular", label: "ADMM / prox (planar + face regularity)" },
-  { id: "guided_alm", label: "Guided projection + ALM/GN (linearized constraints)" },
-  { id: "guided_alm_squared_slack", label: "Guided projection + ALM (plane vars + squared slacks)" },
-  { id: "guided_alm_modular", label: "Guided projection + ALM (modular framework)" },
+  { id: "admm", label: "Planar projection" },
+  { id: "admm_convex", label: "Planar + convex projection" },
+  { id: "admm_regular", label: "Planar + regularized projection" },
+  { id: "guided_alm", label: "Planar + regularized projection (alias)" },
+  { id: "guided_alm_squared_slack", label: "Planar + convex projection (alias)" },
+  { id: "guided_alm_modular", label: "Planar + regularized projection (alias)" },
 ];
 
 export type HandleSet = {
@@ -37,64 +36,21 @@ export type ProjectorParams = {
 export interface IProjector {
   // Topology is immutable after creation; changing it requires creating a new projector.
   reset(x0: Vec3[]): void;
+  setBaseline(x0: Vec3[]): void;
   setHandles(handles: HandleSet): void;
   step(iterations: number): void;
   getPositionsRef(): ReadonlyArray<Vec3>;
   snapshotPositions(): Vec3[];
   diagnostics(): { totalPlanarityViolation: number };
-  // optional runtime param updates
-  setParams?(
-    next:
-      | ADMMParams
-      | ADMMConvexParams
-      | ADMMRegularParams
-      | ModularProjectorParams
-  ): void;
+  setParams?(next: Partial<ProjectorParams>): void;
+}
+
+function methodFlavor(method: ProjectionMethod): ProjectionFlavor {
+  if (method === "admm_convex" || method === "guided_alm_squared_slack") return "convex";
+  if (method === "admm_regular" || method === "guided_alm" || method === "guided_alm_modular") return "regular";
+  return "planar";
 }
 
 export function createProjector(method: ProjectionMethod, faces: number[][], x0: Vec3[], params: ProjectorParams): IProjector {
-  if (method === "admm_regular") {
-    const p: ADMMRegularParams = {
-      rho: params.rho,
-      wFree: params.wFree,
-      wHandle: params.wHandle,
-      lambdaReg: params.lambdaReg,
-    };
-    return new ADMMRegularPlanarProjector(faces, x0, p);
-  }
-  if (method === "guided_alm") {
-    const p: ModularProjectorParams = {
-      rho: params.rho,
-      wFree: params.wFree,
-      wHandle: params.wHandle,
-      lambdaReg: params.lambdaReg,
-      constraintMode: "inc_unit",
-    };
-    return new ModularPlanarProjector(faces, x0, p);
-  }
-  if (method === "guided_alm_squared_slack") {
-    const p: ModularProjectorParams = {
-      rho: params.rho,
-      wFree: params.wFree,
-      wHandle: params.wHandle,
-      lambdaReg: params.lambdaReg,
-      constraintMode: "inc_noninc_unit_squared_slack",
-    };
-    return new ModularPlanarProjector(faces, x0, p);
-  }
-  if (method === "guided_alm_modular") {
-    const p: ModularProjectorParams = {
-      rho: params.rho,
-      wFree: params.wFree,
-      wHandle: params.wHandle,
-      lambdaReg: params.lambdaReg,
-    };
-    return new ModularPlanarProjector(faces, x0, p);
-  }
-  if (method === "admm_convex") {
-    const p: ADMMConvexParams = { rho: params.rho, wFree: params.wFree, wHandle: params.wHandle };
-    return new ADMMConvexPlanarProjector(faces, x0, p);
-  }
-  const p: ADMMParams = { rho: params.rho, wFree: params.wFree, wHandle: params.wHandle };
-  return new ADMMPlanarProjector(faces, x0, p);
+  return new PlanarProjector(faces, x0, methodFlavor(method), params);
 }

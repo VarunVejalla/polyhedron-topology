@@ -3,7 +3,7 @@ import type * as THREE from "three";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { Vec3 } from "../../engine/math/types";
 import type { ProjectorParams } from "../../engine/projection";
-import type { PolyDerivedCache, PolyRichState, PolyState } from "../../engine/poly";
+import type { PolyDerivedCache } from "../../engine/poly";
 
 export type ProjectionControllerAPI = {
   setHandle: (vid: number, p: Vec3) => void;
@@ -17,11 +17,8 @@ export type ProjectionControllerAPI = {
   resetToBaseline: () => void;
 
   step: (iters: number) => void;
-  stepUntilTol: (maxIters: number, tol: number) => void;
 
   getXRef: () => ReadonlyArray<Vec3>;
-  getPolyState: () => PolyState;
-  getPolyRichState: () => PolyRichState;
   getDerivedCache: () => PolyDerivedCache;
   snapshot: () => Vec3[];
   commitBaseline: (snap: Vec3[]) => void;

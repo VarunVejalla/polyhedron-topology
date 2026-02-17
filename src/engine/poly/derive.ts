@@ -1,6 +1,5 @@
 import type { Vec3 } from "../math/types";
 import { buildPolyRichState } from "./auxiliary";
-import { computePolyLightConstraintMetrics } from "./light";
 import type { PolyDerivedCache, PolyRichState, PolyState, RollStep } from "./types";
 
 function dot3(a: ReadonlyArray<number>, b: ReadonlyArray<number>): number {
@@ -25,6 +24,48 @@ function norm3(a: ReadonlyArray<number>): number {
 
 function edgeKey(a: number, b: number): string {
   return a < b ? `${a},${b}` : `${b},${a}`;
+}
+
+function computeConstraintMetrics(state: PolyState): {
+  planarityMetric: number;
+  unitNormalityMetric: number;
+  convexityViolation: number;
+  isConvex: boolean;
+} {
+  let planarityMetric = 0;
+  for (let fi = 0; fi < state.faces.length; fi++) {
+    const face = state.faces[fi];
+    const plane = state.facePlanes[fi];
+    for (let i = 0; i < face.length; i++) {
+      const p = state.vertices[face[i]];
+      const d = dot3(plane.n, p) - plane.b;
+      planarityMetric += d * d;
+    }
+  }
+
+  let unitNormalityMetric = 0;
+  for (let fi = 0; fi < state.facePlanes.length; fi++) {
+    const n = state.facePlanes[fi].n;
+    const d = dot3(n, n) - 1;
+    unitNormalityMetric += d * d;
+  }
+
+  let convexityViolation = 0;
+  let isConvex = true;
+  const faceSets = state.faces.map((f) => new Set<number>(f));
+  for (let fi = 0; fi < state.faces.length; fi++) {
+    const plane = state.facePlanes[fi];
+    for (let vi = 0; vi < state.vertices.length; vi++) {
+      if (faceSets[fi].has(vi)) continue;
+      const v = dot3(plane.n, state.vertices[vi]) - plane.b;
+      if (v > 0) {
+        isConvex = false;
+        convexityViolation += v * v;
+      }
+    }
+  }
+
+  return { planarityMetric, unitNormalityMetric, convexityViolation, isConvex };
 }
 
 function faceCentroid(vertices: ReadonlyArray<Vec3>, face: ReadonlyArray<number>): Vec3 {
@@ -185,7 +226,7 @@ export function buildPolyDerivedCache(stateArg: PolyState | PolyRichState): Poly
   const rich = isRichState(stateArg) ? stateArg : buildPolyRichState(stateArg);
   const { vertices, faces, facePlanes, aux } = rich;
 
-  const light = computePolyLightConstraintMetrics(rich);
+  const light = computeConstraintMetrics(rich);
   const faceNormals: Vec3[] = facePlanes.map((pl) => [pl.n[0], pl.n[1], pl.n[2]]);
   const faceCentroids: Vec3[] = aux.faceCentroid.map((c) => [c[0], c[1], c[2]]);
   const centerOfMass: Vec3 = [aux.centerOfMass[0], aux.centerOfMass[1], aux.centerOfMass[2]];
