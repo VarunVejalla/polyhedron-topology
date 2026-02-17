@@ -1,6 +1,6 @@
 import type { Vec3 } from "../math/types";
+import { v3 } from "../math/vec3";
 import { buildPolyRichState } from "./auxiliary";
-import { cross3, dot3, sub3 } from "./math";
 import type { PolyDerivedCache, PolyRichState, PolyState, RollStep } from "./types";
 
 function edgeKey(a: number, b: number): string {
@@ -32,14 +32,14 @@ function computeConstraintMetrics(state: PolyState) {
     const plane = state.facePlanes[fi];
     for (let i = 0; i < face.length; i++) {
       const p = state.vertices[face[i]];
-      const d = dot3(plane.n, p) - plane.b;
+      const d = v3.dot(plane.n, p) - plane.b;
       planarityMetric += d * d;
     }
-    const unit = dot3(plane.n, plane.n) - 1;
+    const unit = v3.dot(plane.n, plane.n) - 1;
     unitNormalityMetric += unit * unit;
     for (let vi = 0; vi < state.vertices.length; vi++) {
       if (faceSets[fi].has(vi)) continue;
-      const out = dot3(plane.n, state.vertices[vi]) - plane.b;
+      const out = v3.dot(plane.n, state.vertices[vi]) - plane.b;
       if (out > 0) {
         isConvex = false;
         convexityViolation += out * out;
@@ -53,8 +53,8 @@ function computeConstraintMetrics(state: PolyState) {
 function polygonMargin(
   vertices: ReadonlyArray<Vec3>,
   face: ReadonlyArray<number>,
-  n: ReadonlyArray<number>,
-  q: ReadonlyArray<number>
+  n: Readonly<Vec3>,
+  q: Readonly<Vec3>
 ): { margin: number; inside: boolean; minEdgeIndex: number } {
   if (face.length < 3) return { margin: -Infinity, inside: false, minEdgeIndex: -1 };
   const center = centroidOfFace(vertices, face);
@@ -63,7 +63,7 @@ function polygonMargin(
   for (let i = 0; i < face.length; i++) {
     const a = vertices[face[i]];
     const b = vertices[face[(i + 1) % face.length]];
-    const s = dot3(cross3(sub3(b, a), sub3(center, a)), n);
+    const s = v3.dot(v3.cross(v3.sub(b, a), v3.sub(center, a)), n);
     if (Math.abs(s) > 1e-12) {
       orientSign = s >= 0 ? 1 : -1;
       break;
@@ -75,9 +75,9 @@ function polygonMargin(
   for (let i = 0; i < face.length; i++) {
     const a = vertices[face[i]];
     const b = vertices[face[(i + 1) % face.length]];
-    const edge = sub3(b, a);
-    const len = Math.max(1e-12, Math.hypot(edge[0], edge[1], edge[2]));
-    const s = dot3(cross3(edge, sub3(q, a)), n) / len;
+    const edge = v3.sub(b, a);
+    const len = Math.max(1e-12, v3.norm(edge));
+    const s = v3.dot(v3.cross(edge, v3.sub(q, a)), n) / len;
     const margin = s * orientSign;
     if (margin < minMargin) {
       minMargin = margin;

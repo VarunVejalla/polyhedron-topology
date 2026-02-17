@@ -1,5 +1,6 @@
 import type { Plane } from "../math/plane";
 import type { Vec3 } from "../math/types";
+import { v3 } from "../math/vec3";
 import { evaluateQuadratic, quadraticizeAt, zeroQuadratic } from "../optimization/quadratic";
 import { OptimizerSession } from "../optimization/session";
 import type {
@@ -103,13 +104,8 @@ function laplacianGradient(positions: ReadonlyArray<Vec3>, neighbors: ReadonlyAr
       avg[1] += p[1];
       avg[2] += p[2];
     }
-    const inv = 1 / adj.length;
-    avg[0] *= inv;
-    avg[1] *= inv;
-    avg[2] *= inv;
-    out[vi][0] = positions[vi][0] - avg[0];
-    out[vi][1] = positions[vi][1] - avg[1];
-    out[vi][2] = positions[vi][2] - avg[2];
+    const avgScaled = v3.mul(avg, 1 / adj.length);
+    out[vi] = v3.sub(positions[vi], avgScaled);
   }
   return out;
 }
@@ -121,18 +117,13 @@ function orientPlanesOutward(positions: ReadonlyArray<Vec3>, planes: ReadonlyArr
     center[1] += positions[i][1];
     center[2] += positions[i][2];
   }
-  if (positions.length > 0) {
-    const inv = 1 / positions.length;
-    center[0] *= inv;
-    center[1] *= inv;
-    center[2] *= inv;
-  }
+  const c = positions.length > 0 ? v3.mul(center, 1 / positions.length) : center;
   return planes.map((plane) => {
     let n: Vec3 = [plane.n[0], plane.n[1], plane.n[2]];
     let b = plane.b;
-    const side = n[0] * center[0] + n[1] * center[1] + n[2] * center[2] - b;
+    const side = v3.dot(n, c) - b;
     if (side > 0) {
-      n = [-n[0], -n[1], -n[2]];
+      n = v3.mul(n, -1);
       b = -b;
     }
     return { n, b };

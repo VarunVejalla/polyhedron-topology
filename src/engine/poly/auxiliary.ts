@@ -1,12 +1,31 @@
 import type { Vec3 } from "../math/types";
 import type { FaceEdgeIncidence, PlaneEq, PolyAuxState, PolyRichState, PolyState, PolyTopologyData } from "./types";
 import { buildPolyTopology } from "./topology";
-import { averageVertices, cross3, dot3 } from "./math";
+import { v3 } from "../math/vec3";
 
 function normalizePlane(plane: PlaneEq): PlaneEq {
-  const len = Math.max(1e-12, Math.hypot(plane.n[0], plane.n[1], plane.n[2]));
-  const inv = 1 / len;
-  return { n: [plane.n[0] * inv, plane.n[1] * inv, plane.n[2] * inv], b: plane.b * inv };
+  const inv = 1 / Math.max(1e-12, v3.norm(plane.n));
+  return { n: v3.mul(plane.n, inv), b: plane.b * inv };
+}
+
+function averageVertices(vertices: ReadonlyArray<Vec3>, ids?: ReadonlyArray<number>): Vec3 {
+  const c: Vec3 = [0, 0, 0];
+  const n = ids ? ids.length : vertices.length;
+  if (n === 0) return c;
+  if (ids) {
+    for (let i = 0; i < ids.length; i++) {
+      c[0] += vertices[ids[i]][0];
+      c[1] += vertices[ids[i]][1];
+      c[2] += vertices[ids[i]][2];
+    }
+  } else {
+    for (let i = 0; i < vertices.length; i++) {
+      c[0] += vertices[i][0];
+      c[1] += vertices[i][1];
+      c[2] += vertices[i][2];
+    }
+  }
+  return v3.mul(c, 1 / n);
 }
 
 export function buildPolyAuxState(
@@ -21,7 +40,7 @@ export function buildPolyAuxState(
   const edgeCross: Vec3[] = new Array(topology.edges.length);
   for (let ei = 0; ei < topology.edges.length; ei++) {
     const e = topology.edges[ei];
-    edgeCross[ei] = cross3(state.vertices[e.a], state.vertices[e.b]);
+    edgeCross[ei] = v3.cross(state.vertices[e.a], state.vertices[e.b]);
   }
 
   const faceVectorArea: Vec3[] = new Array(state.faces.length);
@@ -45,11 +64,11 @@ export function buildPolyAuxState(
       a0 += 0.5 * sign * t[0];
       a1 += 0.5 * sign * t[1];
       a2 += 0.5 * sign * t[2];
-      incArea[li] = sign * dot3(n, t);
+      incArea[li] = sign * v3.dot(n, t);
     }
     const a: Vec3 = [a0, a1, a2];
     faceVectorArea[fi] = a;
-    const A = dot3(n, a);
+    const A = v3.dot(n, a);
     faceScalarArea[fi] = A;
     facePyramidVolume[fi] = (b * A) / 3;
     signedIncidenceArea[fi] = incArea;
@@ -97,7 +116,7 @@ export function buildPolyAuxState(
   for (let fi = 0; fi < state.faces.length; fi++) {
     const n = planes[fi].n;
     const b = planes[fi].b;
-    const d = dot3(n, centerOfMass) - b;
+    const d = v3.dot(n, centerOfMass) - b;
     faceComDistance[fi] = d;
     projectedComByFace[fi] = [
       centerOfMass[0] - d * n[0],

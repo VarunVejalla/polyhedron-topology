@@ -1,5 +1,5 @@
 import { EPS } from "./constants";
-import type { Vec3 } from "./vec3";
+import type { Vec3 } from "./types";
 
 /**
  * Jacobi eigen-decomposition for a real symmetric 3x3 matrix.
