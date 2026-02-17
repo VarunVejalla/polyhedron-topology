@@ -110,21 +110,16 @@ export function useGraphEditorState(opts: UseGraphEditorStateOpts) {
     try {
       const faces = facesFromEmbedding(topology.nodeIds, topology.edgesTopo, report.embedding);
       return { polyFaces: faces, polyFaceError: null };
-    } catch (e: any) {
-      return { polyFaces: null, polyFaceError: String(e?.message ?? e) };
+    } catch (e: unknown) {
+      return { polyFaces: null, polyFaceError: String(e) };
     }
   }, [topology.nodeIds, topology.edgesTopo, report]);
 
-  useEffect(() => {
-    if (!polyFaces || polyFaces.length === 0) {
-      setSelectedOuterFaceId(null);
-      return;
-    }
-    const exists = selectedOuterFaceId ? polyFaces.some((f) => f.id === selectedOuterFaceId) : false;
-    if (!exists) {
-      const outer = chooseOuterFace(polyFaces);
-      setSelectedOuterFaceId(outer?.id ?? polyFaces[0].id);
-    }
+  const effectiveOuterFaceId = useMemo(() => {
+    if (!polyFaces || polyFaces.length === 0) return null;
+    if (selectedOuterFaceId && polyFaces.some((f) => f.id === selectedOuterFaceId)) return selectedOuterFaceId;
+    const outer = chooseOuterFace(polyFaces);
+    return outer?.id ?? polyFaces[0]?.id ?? null;
   }, [polyFaces, selectedOuterFaceId]);
 
   // External topology swaps (preset/build/dual-sync) should clear local editor interaction state.
@@ -316,7 +311,7 @@ export function useGraphEditorState(opts: UseGraphEditorStateOpts) {
     if (!polyFaces) return;
 
     const outerFace =
-      (selectedOuterFaceId ? polyFaces.find((f) => f.id === selectedOuterFaceId) : null) ??
+      (effectiveOuterFaceId ? polyFaces.find((f) => f.id === effectiveOuterFaceId) : null) ??
       chooseOuterFace(polyFaces);
     if (!outerFace) return;
 
@@ -369,7 +364,7 @@ export function useGraphEditorState(opts: UseGraphEditorStateOpts) {
     layoutMode,
     polyFaces,
     polyFaceError,
-    selectedOuterFaceId,
+    selectedOuterFaceId: effectiveOuterFaceId,
     setSelectedOuterFaceId,
     setLayoutMode,
     onBackgroundDown,

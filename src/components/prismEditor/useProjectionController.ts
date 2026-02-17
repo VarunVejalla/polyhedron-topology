@@ -20,15 +20,18 @@ export function useProjectionController(
   params: ProjectorParams
 ): ProjectionControllerAPI {
   const topologyKey = useMemo(() => JSON.stringify(faces), [faces]);
+  const initialState = buildPolyState(initialVertices, faces);
+  const initialTopology = buildPolyTopology(faces, initialVertices.length);
+  const initialFull = buildPolyFullModel(initialState, initialTopology);
   const projectorRef = useRef<IProjector | null>(null);
   const handlesRef = useRef<Map<number, Vec3>>(new Map());
   const baselineRef = useRef<Vec3[]>(initialVertices.map((p: Vec3) => [...p] as Vec3));
   const paramsRef = useRef<ProjectorParams>(params);
   const lastPlanesRef = useRef<PlaneEq[]>([]);
-  const topologyRef = useRef<PolyTopologyData>(buildPolyTopology(faces, initialVertices.length));
-  const polyStateRef = useRef<PolyState>(buildPolyState(initialVertices, faces));
-  const polyRichRef = useRef<PolyRichState>(buildPolyFullModel(polyStateRef.current, topologyRef.current).rich);
-  const derivedRef = useRef<PolyDerivedCache>(buildPolyFullModel(polyStateRef.current, topologyRef.current).derived);
+  const topologyRef = useRef<PolyTopologyData>(initialTopology);
+  const polyStateRef = useRef<PolyState>(initialFull.rich);
+  const polyRichRef = useRef<PolyRichState>(initialFull.rich);
+  const derivedRef = useRef<PolyDerivedCache>(initialFull.derived);
 
   const recomputePolyCache = useCallback((X: ReadonlyArray<Vec3>) => {
     const state = buildPolyState(X, faces, lastPlanesRef.current);
@@ -72,7 +75,22 @@ export function useProjectionController(
     handlesRef.current.clear();
   }, []);
 
+  const hasHandle = useCallback((vid: number) => handlesRef.current.has(vid), []);
+
+  const getHandleTargets = useCallback((): ReadonlyMap<number, Vec3> => handlesRef.current, []);
+
   const getHandleCount = useCallback(() => handlesRef.current.size, []);
+
+  const getParams = useCallback((): ProjectorParams => paramsRef.current, []);
+
+  const getBaselineSnapshot = useCallback((): Vec3[] => baselineRef.current.map((p) => [...p] as Vec3), []);
+
+  const resetToBaseline = useCallback(() => {
+    const baseline = baselineRef.current.map((p) => [...p] as Vec3);
+    projectorRef.current?.reset(baseline);
+    handlesRef.current.clear();
+    recomputePolyCache(baseline);
+  }, [recomputePolyCache]);
 
   const step = useCallback((iters: number) => {
     const proj = projectorRef.current;
@@ -106,9 +124,10 @@ export function useProjectionController(
   }, []);
 
   const commitBaseline = useCallback((snap: Vec3[]) => {
-    baselineRef.current = snap;
-    projectorRef.current?.reset(snap);
-    recomputePolyCache(snap);
+    const baseline = snap.map((p) => [...p] as Vec3);
+    baselineRef.current = baseline;
+    projectorRef.current?.reset(baseline);
+    recomputePolyCache(baseline);
   }, [recomputePolyCache]);
 
   const getPolyState = useCallback((): PolyState => {
@@ -138,14 +157,15 @@ export function useProjectionController(
   // Keep the returned controller API object stable across renders.
   return useMemo(
     () => ({
-      projectorRef,
-      paramsRef,
-      handlesRef,
-      baselineRef,
       setHandle,
       clearHandle,
       clearAllHandles,
+      hasHandle,
+      getHandleTargets,
       getHandleCount,
+      getParams,
+      getBaselineSnapshot,
+      resetToBaseline,
       step,
       stepUntilTol,
       getXRef,
@@ -160,7 +180,12 @@ export function useProjectionController(
       setHandle,
       clearHandle,
       clearAllHandles,
+      hasHandle,
+      getHandleTargets,
       getHandleCount,
+      getParams,
+      getBaselineSnapshot,
+      resetToBaseline,
       step,
       stepUntilTol,
       getXRef,

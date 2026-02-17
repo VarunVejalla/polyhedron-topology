@@ -87,13 +87,18 @@ export function useThreePolyhedronScene(
   initialVertices: Vec3[]
 ): ThreeSceneAPI | null {
   const topologyKey = useMemo(() => JSON.stringify(faces), [faces]);
+  const initialVerticesRef = React.useRef<Vec3[]>(initialVertices.map((p) => [p[0], p[1], p[2]] as Vec3));
   const [api, setApi] = useState<ThreeSceneAPI | null>(null);
+
+  useEffect(() => {
+    initialVerticesRef.current = initialVertices.map((p) => [p[0], p[1], p[2]] as Vec3);
+  }, [initialVertices]);
 
   useEffect(() => {
     const mount = mountRef.current;
     if (!mount) return;
 
-    const X0 = initialVertices;
+    const X0 = initialVerticesRef.current;
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0xf6f6f6);
@@ -568,7 +573,7 @@ export function useThreePolyhedronScene(
       setApi(null);
       dispose();
     };
-  }, [topologyKey, mountRef]);
+  }, [topologyKey, mountRef, faces]);
 
   useEffect(() => {
     if (!api) return;

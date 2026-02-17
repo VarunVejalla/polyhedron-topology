@@ -1,11 +1,10 @@
 import type { SimpleGraph } from "../graph/types";
 import { cloneGraph } from "../graph/core";
 import { buildVertexPresetGraph, presetNames } from "../graph/presets";
+import { GRAPH_VIEW } from "../graph/view";
 import { makeDefaultPrism, PRISM_FACES, type Vec3 } from "../engine/prismTopology";
 import type { ProjectionMethod } from "../engine/projection";
 import { deriveDualPairFromVertexGraph } from "../graph/pipeline";
-
-export const GRAPH_VIEW = { w: 420, h: 360, padding: 28 };
 
 type PolyDocument = {
   vertices: Vec3[];

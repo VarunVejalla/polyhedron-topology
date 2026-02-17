@@ -1,5 +1,13 @@
 import type { Vec3 } from "../math/types";
 import { bestFitPlanePCA, type Plane } from "../geom/plane";
+import {
+  buildVertexIncidence,
+  computePlanarityViolationFromPlanes,
+  createPlanarFaceBuffers,
+  fitFacePlanesFromPositions,
+  updatePlanarDualBlock,
+  updatePlanarYBlock,
+} from "./admmPlanarShared";
 import type { HandleSet, IProjector } from "./index";
 
 export type ADMMRegularParams = {
@@ -48,17 +56,12 @@ export class ADMMRegularPlanarProjector implements IProjector {
     this.x0 = x0.map((p) => [...p] as Vec3);
     this.x = x0.map((p) => [...p] as Vec3);
 
-    this.y = this.faces.map((f) => f.map((vi) => [...this.x[vi]] as Vec3));
-    this.u = this.faces.map((f) => f.map(() => [0, 0, 0] as Vec3));
+    const planar = createPlanarFaceBuffers(this.faces, this.x);
+    this.y = planar.y;
+    this.u = planar.u;
+    this.vbuf = planar.vbuf;
 
-    this.inc = Array.from({ length: this.x.length }, () => []);
-    for (let fi = 0; fi < this.faces.length; fi++) {
-      const f = this.faces[fi];
-      for (let li = 0; li < f.length; li++) {
-        const vi = f[li];
-        this.inc[vi].push({ fi, li });
-      }
-    }
+    this.inc = buildVertexIncidence(this.faces, this.x.length);
 
     this.vertexFaces = Array.from({ length: this.x.length }, () => []);
     for (let vi = 0; vi < this.inc.length; vi++) {
@@ -68,16 +71,8 @@ export class ADMMRegularPlanarProjector implements IProjector {
     }
 
     this.prevFaceNormals = new Array(this.faces.length).fill(undefined);
-    this.vbuf = this.faces.map((f) => f.map(() => [0, 0, 0] as Vec3));
-
-    this.facePlanes = this.faces.map((f, fi) => {
-      const pts: Vec3[] = f.map((vi) => this.x[vi]);
-      const plane = bestFitPlanePCA(pts, this.prevFaceNormals[fi]);
-      this.prevFaceNormals[fi] = plane.n;
-      return plane;
-    });
-
-    this.lastTotalViolation = this.computeTotalViolationFromCachedPlanes(this.x);
+    this.facePlanes = fitFacePlanesFromPositions(this.faces, this.x, this.prevFaceNormals);
+    this.lastTotalViolation = computePlanarityViolationFromPlanes(this.faces, this.x, this.facePlanes);
   }
 
   setHandles(handles: HandleSet) {
@@ -86,22 +81,6 @@ export class ADMMRegularPlanarProjector implements IProjector {
 
   setParams(next: Partial<ADMMRegularParams>) {
     this.params = { ...this.params, ...next };
-  }
-
-  private computeTotalViolationFromCachedPlanes(positions: ReadonlyArray<Vec3>): number {
-    let total = 0;
-    for (let fi = 0; fi < this.faces.length; fi++) {
-      const plane = this.facePlanes[fi];
-      const n = plane.n;
-      const b = plane.b;
-      const face = this.faces[fi];
-      for (let k = 0; k < face.length; k++) {
-        const p = positions[face[k]];
-        const d = n[0] * p[0] + n[1] * p[1] + n[2] * p[2] - b;
-        total += Math.abs(d);
-      }
-    }
-    return total;
   }
 
   private faceRegularity(fi: number, positions: ReadonlyArray<Vec3>, epsArea: number): number {
@@ -259,34 +238,7 @@ export class ADMMRegularPlanarProjector implements IProjector {
 
     for (let it = 0; it < iterations; it++) {
       // 1) Local planar projection block (y-update first).
-      for (let fi = 0; fi < this.faces.length; fi++) {
-        const f = this.faces[fi];
-        const v = this.vbuf[fi];
-
-        for (let li = 0; li < f.length; li++) {
-          const vi = f[li];
-          const x = this.x[vi];
-          const u = this.u[fi][li];
-          v[li][0] = x[0] + u[0];
-          v[li][1] = x[1] + u[1];
-          v[li][2] = x[2] + u[2];
-        }
-
-        const plane = bestFitPlanePCA(v, this.prevFaceNormals[fi]);
-        this.prevFaceNormals[fi] = plane.n;
-        this.facePlanes[fi] = plane;
-
-        const yfi = this.y[fi];
-        const n = plane.n;
-        const b = plane.b;
-        for (let li = 0; li < f.length; li++) {
-          const p = v[li];
-          const t = n[0] * p[0] + n[1] * p[1] + n[2] * p[2] - b;
-          yfi[li][0] = p[0] - n[0] * t;
-          yfi[li][1] = p[1] - n[1] * t;
-          yfi[li][2] = p[2] - n[2] * t;
-        }
-      }
+      updatePlanarYBlock(this.faces, this.x, this.u, this.vbuf, this.y, this.prevFaceNormals, this.facePlanes);
 
       // Consensus targets c = y - u
       for (let fi = 0; fi < this.faces.length; fi++) {
@@ -364,20 +316,8 @@ export class ADMMRegularPlanarProjector implements IProjector {
       }
 
       // 3) Dual update: u += x - y
-      for (let fi = 0; fi < this.faces.length; fi++) {
-        const f = this.faces[fi];
-        for (let li = 0; li < f.length; li++) {
-          const vi = f[li];
-          const u = this.u[fi][li];
-          const x = this.x[vi];
-          const y = this.y[fi][li];
-          u[0] += x[0] - y[0];
-          u[1] += x[1] - y[1];
-          u[2] += x[2] - y[2];
-        }
-      }
-
-      this.lastTotalViolation = this.computeTotalViolationFromCachedPlanes(this.x);
+      updatePlanarDualBlock(this.faces, this.x, this.y, this.u);
+      this.lastTotalViolation = computePlanarityViolationFromPlanes(this.faces, this.x, this.facePlanes);
     }
   }
 

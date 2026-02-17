@@ -8,8 +8,9 @@ import { projectionMethods, type ProjectionMethod } from "./engine/projection";
 
 import { presetNames } from "./graph/presets";
 import { derivePolyFromFaceGraph, derivePolyFromVertexGraph } from "./graph/pipeline";
+import { GRAPH_VIEW } from "./graph/view";
 
-import { createInitialState, documentReducer, GRAPH_VIEW } from "./state/document";
+import { createInitialState, documentReducer } from "./state/document";
 
 export default function App() {
   const presetList = useMemo(() => presetNames(), []);

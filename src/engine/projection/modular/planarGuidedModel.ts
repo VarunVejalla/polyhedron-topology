@@ -2,17 +2,20 @@ import type { Vec3 } from "../../math/types";
 import { bestFitPlanePCA } from "../../geom/plane";
 import {
   buildPolyTopology,
-  lightBIndex,
   lightFullDim,
   lightNBase,
   lightVertexDim,
   nonIncidenceConstraintValue,
   packPolyLightState,
-  incidenceConstraintLinearization,
   incidenceConstraintValue,
   squaredSlackNonIncidenceConstraintLinearization,
-  unitNormalConstraintLinearization,
   unitNormalConstraintValue,
+  buildIncidenceSparseRow,
+  buildSquaredSlackNonIncidenceSparseRow,
+  buildUnitNormalSparseRow,
+  rowsApplyJ,
+  rowsApplyJT,
+  type SparseRow,
   type PolyState,
   type VertexFaceIncidence,
 } from "../../poly";
@@ -24,34 +27,6 @@ import type { ConstraintLinearization, MetaModel, MetaModelBuilder, MetaState } 
 type NonIncidence = VertexFaceIncidence & {
   di: number;
 };
-
-type IncLinearized = {
-  kind: "inc";
-  fi: number;
-  vi: number;
-  gV: Vec3;
-  gN: Vec3;
-  gB: number;
-};
-
-type NonIncLinearized = {
-  kind: "noninc";
-  fi: number;
-  vi: number;
-  di: number;
-  gV: Vec3;
-  gN: Vec3;
-  gB: number;
-  gD: number;
-};
-
-type UnitLinearized = {
-  kind: "unit";
-  fi: number;
-  gN: Vec3;
-};
-
-type LinearizedRow = IncLinearized | NonIncLinearized | UnitLinearized;
 
 export type ModularConstraintMode = "inc_unit" | "inc_noninc_unit_squared_slack";
 
@@ -273,114 +248,29 @@ export class PlanarGuidedModelBuilder implements MetaModelBuilder {
   private linearizeConstraints(y: ReadonlyArray<number>): ConstraintLinearization {
     const mInc = this.incidences.length;
     const mNon = this.nonIncidences.length;
-    const rows: LinearizedRow[] = new Array(mInc + mNon + this.faces.length);
-    const c0 = new Array<number>(rows.length);
+    const rows: SparseRow[] = new Array(mInc + mNon + this.faces.length);
 
-        for (let ri = 0; ri < mInc; ri++) {
+    for (let ri = 0; ri < mInc; ri++) {
       const pair = this.incidences[ri];
-      const lin = incidenceConstraintLinearization(y, this.x0.length, pair);
-      rows[ri] = {
-        kind: "inc",
-        fi: pair.fi,
-        vi: pair.vi,
-        gV: lin.gV,
-        gN: lin.gN,
-        gB: lin.gB,
-      };
-      c0[ri] = lin.value;
+      rows[ri] = buildIncidenceSparseRow(y, this.x0.length, pair);
     }
 
     for (let qi = 0; qi < mNon; qi++) {
       const rowIndex = mInc + qi;
       const pair = this.nonIncidences[qi];
       const d = y[this.dIndex(pair.di)];
-      const lin = squaredSlackNonIncidenceConstraintLinearization(y, this.x0.length, pair, d);
-      rows[rowIndex] = {
-        kind: "noninc",
-        fi: pair.fi,
-        vi: pair.vi,
-        di: pair.di,
-        gV: lin.gV,
-        gN: lin.gN,
-        gB: lin.gB,
-        gD: lin.gD,
-      };
-      c0[rowIndex] = lin.value;
+      rows[rowIndex] = buildSquaredSlackNonIncidenceSparseRow(y, this.x0.length, pair, d, this.dIndex(pair.di));
     }
 
     for (let fi = 0; fi < this.faces.length; fi++) {
-      const idx = mInc + mNon + fi;
-      const lin = unitNormalConstraintLinearization(y, this.x0.length, fi);
-      rows[idx] = { kind: "unit", fi, gN: lin.gN };
-      c0[idx] = lin.value;
+      rows[mInc + mNon + fi] = buildUnitNormalSparseRow(y, this.x0.length, fi);
     }
 
-    const applyJ = (v: ReadonlyArray<number>): number[] => {
-      const out = new Array<number>(rows.length).fill(0);
-      for (let i = 0; i < rows.length; i++) {
-        const r = rows[i];
-        if (r.kind === "inc") {
-          const vb = 3 * r.vi;
-          const nb = lightNBase(this.x0.length, r.fi);
-          out[i] =
-            r.gV[0] * v[vb] + r.gV[1] * v[vb + 1] + r.gV[2] * v[vb + 2] +
-            r.gN[0] * v[nb] + r.gN[1] * v[nb + 1] + r.gN[2] * v[nb + 2] +
-            r.gB * v[lightBIndex(this.x0.length, r.fi)];
-        } else if (r.kind === "noninc") {
-          const vb = 3 * r.vi;
-          const nb = lightNBase(this.x0.length, r.fi);
-          out[i] =
-            r.gV[0] * v[vb] + r.gV[1] * v[vb + 1] + r.gV[2] * v[vb + 2] +
-            r.gN[0] * v[nb] + r.gN[1] * v[nb + 1] + r.gN[2] * v[nb + 2] +
-            r.gB * v[lightBIndex(this.x0.length, r.fi)] +
-            r.gD * v[this.dIndex(r.di)];
-        } else {
-          const nb = lightNBase(this.x0.length, r.fi);
-          out[i] = r.gN[0] * v[nb] + r.gN[1] * v[nb + 1] + r.gN[2] * v[nb + 2];
-        }
-      }
-      return out;
+    return {
+      c0: rows.map((r) => r.c),
+      applyJ: (v: ReadonlyArray<number>) => rowsApplyJ(rows, v),
+      applyJT: (w: ReadonlyArray<number>) => rowsApplyJT(rows, w, this.fullDim()),
     };
-
-    const applyJT = (w: ReadonlyArray<number>): number[] => {
-      const out = new Array<number>(this.fullDim()).fill(0);
-      for (let i = 0; i < rows.length; i++) {
-        const wi = w[i];
-        const r = rows[i];
-        if (r.kind === "inc") {
-          const vb = 3 * r.vi;
-          const nb = lightNBase(this.x0.length, r.fi);
-          const bb = lightBIndex(this.x0.length, r.fi);
-          out[vb] += wi * r.gV[0];
-          out[vb + 1] += wi * r.gV[1];
-          out[vb + 2] += wi * r.gV[2];
-          out[nb] += wi * r.gN[0];
-          out[nb + 1] += wi * r.gN[1];
-          out[nb + 2] += wi * r.gN[2];
-          out[bb] += wi * r.gB;
-        } else if (r.kind === "noninc") {
-          const vb = 3 * r.vi;
-          const nb = lightNBase(this.x0.length, r.fi);
-          const bb = lightBIndex(this.x0.length, r.fi);
-          out[vb] += wi * r.gV[0];
-          out[vb + 1] += wi * r.gV[1];
-          out[vb + 2] += wi * r.gV[2];
-          out[nb] += wi * r.gN[0];
-          out[nb + 1] += wi * r.gN[1];
-          out[nb + 2] += wi * r.gN[2];
-          out[bb] += wi * r.gB;
-          out[this.dIndex(r.di)] += wi * r.gD;
-        } else {
-          const nb = lightNBase(this.x0.length, r.fi);
-          out[nb] += wi * r.gN[0];
-          out[nb + 1] += wi * r.gN[1];
-          out[nb + 2] += wi * r.gN[2];
-        }
-      }
-      return out;
-    };
-
-    return { c0, applyJ, applyJT };
   }
 
   private evalConstraintsOnly(y: ReadonlyArray<number>): number[] {

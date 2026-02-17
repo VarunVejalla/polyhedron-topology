@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { SimpleGraph } from "../graph/types";
+import { GRAPH_VIEW } from "../graph/view";
 import { SingleGraphEditor } from "./graphEditor/SingleGraphEditor";
 
 type Props = {
@@ -10,8 +11,6 @@ type Props = {
   updateVertexGraph: (g: SimpleGraph) => void;
   commitVertexGraph: (g: SimpleGraph) => void;
 };
-
-const GRAPH_VIEW = { w: 420, h: 360, padding: 28 };
 
 export function GraphEditor({ faceGraph, vertexGraph, updateFaceGraph, commitFaceGraph, updateVertexGraph, commitVertexGraph }: Props) {
   const [activeTab, setActiveTab] = useState<"face" | "vertex">("face");

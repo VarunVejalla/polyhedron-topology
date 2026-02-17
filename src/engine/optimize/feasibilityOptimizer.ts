@@ -2,15 +2,21 @@ import type { Vec3 } from "../math/types";
 import {
   buildPolyAuxState,
   buildPolyLightModelFromState,
-  lightBIndex,
+  buildIncidenceSparseRow,
+  buildUnitNormalSparseRow,
   lightFullDim,
   lightNBase,
   lightVertexDim,
   incidenceConstraintLinearization,
   incidenceConstraintValue,
   nonIncidenceConstraintValue,
+  pushIncidenceGradientTriplets,
+  pushSparseTriplet,
   readLightVertex,
+  rowsApplyJ,
+  rowsApplyJT,
   unitNormalConstraintValue,
+  type SparseRow,
   type PolyState,
   type PolyTopologyData,
   unpackPolyLightState,
@@ -24,12 +30,6 @@ import {
 import { runMetaSolver } from "../projection/modular/solver";
 import type { MetaModel, MetaModelBuilder, MetaState } from "../projection/modular/types";
 import { normN } from "../projection/shared/numeric";
-
-type SparseRow = {
-  idx: number[];
-  val: number[];
-  c: number;
-};
 
 type ActivePieceProvider = {
   getTargetAntiFaces: () => number[];
@@ -115,36 +115,6 @@ function cross3(a: ReadonlyArray<number>, b: ReadonlyArray<number>): Vec3 {
 
 function norm3(a: ReadonlyArray<number>): number {
   return Math.hypot(a[0], a[1], a[2]);
-}
-
-function pushSparseTriplet(row: SparseRow, idx: number, value: number) {
-  if (!Number.isFinite(value)) return;
-  if (Math.abs(value) < 1e-14) return;
-  row.idx.push(idx);
-  row.val.push(value);
-}
-
-function rowDot(row: SparseRow, x: ReadonlyArray<number>): number {
-  let s = 0;
-  for (let i = 0; i < row.idx.length; i++) s += row.val[i] * x[row.idx[i]];
-  return s;
-}
-
-function rowsApplyJ(rows: ReadonlyArray<SparseRow>, v: ReadonlyArray<number>): number[] {
-  const out = new Array<number>(rows.length);
-  for (let i = 0; i < rows.length; i++) out[i] = rowDot(rows[i], v);
-  return out;
-}
-
-function rowsApplyJT(rows: ReadonlyArray<SparseRow>, w: ReadonlyArray<number>, dim: number): number[] {
-  const out = new Array<number>(dim).fill(0);
-  for (let i = 0; i < rows.length; i++) {
-    const wi = w[i];
-    if (wi === 0) continue;
-    const row = rows[i];
-    for (let j = 0; j < row.idx.length; j++) out[row.idx[j]] += wi * row.val[j];
-  }
-  return out;
 }
 
 function buildStateFromLightY(
@@ -262,30 +232,11 @@ class FeasibilityMetaModelBuilder implements MetaModelBuilder {
     const rows: SparseRow[] = [];
 
     for (let i = 0; i < this.topology.incidencePairs.length; i++) {
-      const pair = this.topology.incidencePairs[i];
-      const vb = 3 * pair.vi;
-      const nb = lightNBase(this.vertexCount(), pair.fi);
-      const bb = lightBIndex(this.vertexCount(), pair.fi);
-      const lin = incidenceConstraintLinearization(y, this.vertexCount(), pair);
-      const row: SparseRow = { idx: [], val: [], c: lin.value };
-      pushSparseTriplet(row, vb, lin.gV[0]);
-      pushSparseTriplet(row, vb + 1, lin.gV[1]);
-      pushSparseTriplet(row, vb + 2, lin.gV[2]);
-      pushSparseTriplet(row, nb, lin.gN[0]);
-      pushSparseTriplet(row, nb + 1, lin.gN[1]);
-      pushSparseTriplet(row, nb + 2, lin.gN[2]);
-      pushSparseTriplet(row, bb, lin.gB);
-      rows.push(row);
+      rows.push(buildIncidenceSparseRow(y, this.vertexCount(), this.topology.incidencePairs[i]));
     }
 
     for (let fi = 0; fi < this.faces.length; fi++) {
-      const nb = lightNBase(this.vertexCount(), fi);
-      const c = unitNormalConstraintValue(y, this.vertexCount(), fi);
-      const row: SparseRow = { idx: [], val: [], c };
-      pushSparseTriplet(row, nb, 2 * y[nb]);
-      pushSparseTriplet(row, nb + 1, 2 * y[nb + 1]);
-      pushSparseTriplet(row, nb + 2, 2 * y[nb + 2]);
-      rows.push(row);
+      rows.push(buildUnitNormalSparseRow(y, this.vertexCount(), fi));
     }
 
     const aux = this.buildAux(y);
@@ -313,20 +264,11 @@ class FeasibilityMetaModelBuilder implements MetaModelBuilder {
 
     for (let i = 0; i < this.topology.nonIncidencePairs.length; i++) {
       const pair = this.topology.nonIncidencePairs[i];
-      const vb = 3 * pair.vi;
-      const nb = lightNBase(this.vertexCount(), pair.fi);
-      const bb = lightBIndex(this.vertexCount(), pair.fi);
       const g = nonIncidenceConstraintValue(y, this.vertexCount(), pair, params.convexityMargin);
       const row: SparseRow = { idx: [], val: [], c: Math.max(0, g) };
       if (g > 0) {
         const lin = incidenceConstraintLinearization(y, this.vertexCount(), pair);
-        pushSparseTriplet(row, vb, lin.gV[0]);
-        pushSparseTriplet(row, vb + 1, lin.gV[1]);
-        pushSparseTriplet(row, vb + 2, lin.gV[2]);
-        pushSparseTriplet(row, nb, lin.gN[0]);
-        pushSparseTriplet(row, nb + 1, lin.gN[1]);
-        pushSparseTriplet(row, nb + 2, lin.gN[2]);
-        pushSparseTriplet(row, bb, -1);
+        pushIncidenceGradientTriplets(row, this.vertexCount(), pair, { ...lin, gB: -1 });
       }
       rows.push(row);
     }

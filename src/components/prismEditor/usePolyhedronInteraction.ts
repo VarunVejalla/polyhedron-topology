@@ -124,7 +124,7 @@ export function usePolyhedronInteraction(
       const derived = c.getDerivedCache();
       syncSceneFromX(X);
       scene.setDerivedOverlay(derived, stateRef.current.overlayOptions);
-      updateSpheresMaterial(c.handlesRef.current);
+      updateSpheresMaterial(c.getHandleTargets());
       pushStatus({ totalPlanarityViolation: derived.planarityMetric }, c.getHandleCount(), {
         unitNormalityMetric: derived.unitNormalityMetric,
         convexityViolation: derived.convexityViolation,
@@ -155,9 +155,7 @@ export function usePolyhedronInteraction(
 
     const revertToBaseline = () => {
       const c = stateRef.current.controller;
-      const baseline = c.baselineRef.current.map((p) => [...p] as Vec3);
-      c.projectorRef.current?.reset(baseline);
-      c.clearAllHandles();
+      c.resetToBaseline();
       syncFromController();
     };
     revertToBaselineRef.current = revertToBaseline;
@@ -230,7 +228,7 @@ export function usePolyhedronInteraction(
       abortRequestedRef.current = false;
 
       const runController = stateRef.current.controller;
-      const startBaseline = runController.baselineRef.current.map((p) => [...p] as Vec3);
+      const startBaseline = runController.getBaselineSnapshot();
       runController.clearAllHandles();
 
       const opts = stateRef.current.optimizeOptions;
@@ -313,7 +311,7 @@ export function usePolyhedronInteraction(
 
       if (e.button === 2) {
         c.clearHandle(vid);
-        applyProjection(c.paramsRef.current.itersPerFrame);
+        applyProjection(c.getParams().itersPerFrame);
         return;
       }
 
@@ -322,7 +320,7 @@ export function usePolyhedronInteraction(
       dragStartClientX = e.clientX;
       dragStartClientY = e.clientY;
       dragDidMove = false;
-      dragWasHandle = c.handlesRef.current.has(vid);
+      dragWasHandle = c.hasHandle(vid);
       orbit.enabled = false;
 
       const camDir = new THREE.Vector3();
@@ -349,7 +347,7 @@ export function usePolyhedronInteraction(
 
       const c = stateRef.current.controller;
       c.setHandle(dragVertex, [dragHit.x, dragHit.y, dragHit.z]);
-      applyProjection(c.paramsRef.current.itersPerFrame);
+      applyProjection(c.getParams().itersPerFrame);
     };
 
     const onPointerUp = () => {
@@ -367,7 +365,7 @@ export function usePolyhedronInteraction(
       }
 
       const c = stateRef.current.controller;
-      applyProjection(c.paramsRef.current.itersOnRelease);
+      applyProjection(c.getParams().itersOnRelease);
       commit();
     };
 
