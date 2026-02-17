@@ -18,57 +18,11 @@ function cross3(a: ReadonlyArray<number>, b: ReadonlyArray<number>): Vec3 {
   ];
 }
 
-function norm3(a: ReadonlyArray<number>): number {
-  return Math.hypot(a[0], a[1], a[2]);
-}
-
 function edgeKey(a: number, b: number): string {
   return a < b ? `${a},${b}` : `${b},${a}`;
 }
 
-function computeConstraintMetrics(state: PolyState): {
-  planarityMetric: number;
-  unitNormalityMetric: number;
-  convexityViolation: number;
-  isConvex: boolean;
-} {
-  let planarityMetric = 0;
-  for (let fi = 0; fi < state.faces.length; fi++) {
-    const face = state.faces[fi];
-    const plane = state.facePlanes[fi];
-    for (let i = 0; i < face.length; i++) {
-      const p = state.vertices[face[i]];
-      const d = dot3(plane.n, p) - plane.b;
-      planarityMetric += d * d;
-    }
-  }
-
-  let unitNormalityMetric = 0;
-  for (let fi = 0; fi < state.facePlanes.length; fi++) {
-    const n = state.facePlanes[fi].n;
-    const d = dot3(n, n) - 1;
-    unitNormalityMetric += d * d;
-  }
-
-  let convexityViolation = 0;
-  let isConvex = true;
-  const faceSets = state.faces.map((f) => new Set<number>(f));
-  for (let fi = 0; fi < state.faces.length; fi++) {
-    const plane = state.facePlanes[fi];
-    for (let vi = 0; vi < state.vertices.length; vi++) {
-      if (faceSets[fi].has(vi)) continue;
-      const v = dot3(plane.n, state.vertices[vi]) - plane.b;
-      if (v > 0) {
-        isConvex = false;
-        convexityViolation += v * v;
-      }
-    }
-  }
-
-  return { planarityMetric, unitNormalityMetric, convexityViolation, isConvex };
-}
-
-function faceCentroid(vertices: ReadonlyArray<Vec3>, face: ReadonlyArray<number>): Vec3 {
+function centroidOfFace(vertices: ReadonlyArray<Vec3>, face: ReadonlyArray<number>): Vec3 {
   const c: Vec3 = [0, 0, 0];
   if (face.length === 0) return c;
   for (let i = 0; i < face.length; i++) {
@@ -78,142 +32,154 @@ function faceCentroid(vertices: ReadonlyArray<Vec3>, face: ReadonlyArray<number>
     c[2] += p[2];
   }
   const inv = 1 / face.length;
-  c[0] *= inv;
-  c[1] *= inv;
-  c[2] *= inv;
-  return c;
+  return [c[0] * inv, c[1] * inv, c[2] * inv];
 }
 
-function polygonSignedMargin(
+function computeConstraintMetrics(state: PolyState) {
+  const faceSets = state.faces.map((f) => new Set<number>(f));
+  let planarityMetric = 0;
+  let unitNormalityMetric = 0;
+  let convexityViolation = 0;
+  let isConvex = true;
+
+  for (let fi = 0; fi < state.faces.length; fi++) {
+    const face = state.faces[fi];
+    const plane = state.facePlanes[fi];
+    for (let i = 0; i < face.length; i++) {
+      const p = state.vertices[face[i]];
+      const d = dot3(plane.n, p) - plane.b;
+      planarityMetric += d * d;
+    }
+    const unit = dot3(plane.n, plane.n) - 1;
+    unitNormalityMetric += unit * unit;
+    for (let vi = 0; vi < state.vertices.length; vi++) {
+      if (faceSets[fi].has(vi)) continue;
+      const out = dot3(plane.n, state.vertices[vi]) - plane.b;
+      if (out > 0) {
+        isConvex = false;
+        convexityViolation += out * out;
+      }
+    }
+  }
+
+  return { planarityMetric, unitNormalityMetric, convexityViolation, isConvex };
+}
+
+function polygonMargin(
   vertices: ReadonlyArray<Vec3>,
   face: ReadonlyArray<number>,
   n: ReadonlyArray<number>,
   q: ReadonlyArray<number>
 ): { margin: number; inside: boolean; minEdgeIndex: number } {
   if (face.length < 3) return { margin: -Infinity, inside: false, minEdgeIndex: -1 };
-  const c = faceCentroid(vertices, face);
+  const center = centroidOfFace(vertices, face);
 
-  let orientSign = 0;
+  let orientSign = 1;
   for (let i = 0; i < face.length; i++) {
     const a = vertices[face[i]];
     const b = vertices[face[(i + 1) % face.length]];
-    const e = sub3(b, a);
-    const s = dot3(cross3(e, sub3(c, a)), n);
+    const s = dot3(cross3(sub3(b, a), sub3(center, a)), n);
     if (Math.abs(s) > 1e-12) {
       orientSign = s >= 0 ? 1 : -1;
       break;
     }
   }
-  if (orientSign === 0) orientSign = 1;
 
   let minMargin = Number.POSITIVE_INFINITY;
-  let minIdx = -1;
+  let minEdgeIndex = -1;
   for (let i = 0; i < face.length; i++) {
     const a = vertices[face[i]];
     const b = vertices[face[(i + 1) % face.length]];
-    const e = sub3(b, a);
-    const len = Math.max(1e-12, norm3(e));
-    const s = dot3(cross3(e, sub3(q, a)), n) / len;
-    const m = s * orientSign;
-    if (m < minMargin) {
-      minMargin = m;
-      minIdx = i;
+    const edge = sub3(b, a);
+    const len = Math.max(1e-12, Math.hypot(edge[0], edge[1], edge[2]));
+    const s = dot3(cross3(edge, sub3(q, a)), n) / len;
+    const margin = s * orientSign;
+    if (margin < minMargin) {
+      minMargin = margin;
+      minEdgeIndex = i;
     }
   }
 
-  return { margin: minMargin, inside: minMargin >= -1e-9, minEdgeIndex: minIdx };
+  return { margin: minMargin, inside: minMargin >= -1e-9, minEdgeIndex };
 }
 
-function buildFaceAdjacency(faces: ReadonlyArray<ReadonlyArray<number>>): {
-  byEdge: Map<string, number[]>;
-  neighbors: Array<Set<number>>;
-} {
+function buildFaceAdjacency(faces: ReadonlyArray<ReadonlyArray<number>>) {
   const byEdge = new Map<string, number[]>();
-  const neighbors: Array<Set<number>> = Array.from({ length: faces.length }, () => new Set<number>());
+  const neighbors = Array.from({ length: faces.length }, () => new Set<number>());
+
   for (let fi = 0; fi < faces.length; fi++) {
     const face = faces[fi];
     for (let i = 0; i < face.length; i++) {
-      const a = face[i];
-      const b = face[(i + 1) % face.length];
-      const key = edgeKey(a, b);
+      const key = edgeKey(face[i], face[(i + 1) % face.length]);
       const owners = byEdge.get(key);
-      if (!owners) byEdge.set(key, [fi]);
-      else owners.push(fi);
+      if (owners) owners.push(fi);
+      else byEdge.set(key, [fi]);
     }
   }
+
   for (const owners of byEdge.values()) {
     if (owners.length !== 2) continue;
     neighbors[owners[0]].add(owners[1]);
     neighbors[owners[1]].add(owners[0]);
   }
+
   return { byEdge, neighbors };
 }
 
-function fiveColor(
-  nodes: number[],
-  neighbors: Map<number, Set<number>>
-): Map<number, number> {
+function sixColorPlanar(nodes: number[], neighbors: Map<number, Set<number>>): Map<number, number> {
+  const degree = new Map<number, number>();
+  const removed = new Set<number>();
+  const stack: number[] = [];
+  const buckets: Array<Set<number>> = Array.from({ length: 6 }, () => new Set<number>());
+
+  for (let i = 0; i < nodes.length; i++) {
+    const v = nodes[i];
+    const d = neighbors.get(v)?.size ?? 0;
+    degree.set(v, d);
+    buckets[Math.min(5, d)].add(v);
+  }
+
+  for (let k = 0; k < nodes.length; k++) {
+    let v: number | null = null;
+    for (let d = 0; d <= 5; d++) {
+      const it = buckets[d].values().next();
+      if (!it.done) {
+        v = it.value;
+        buckets[d].delete(v);
+        break;
+      }
+    }
+    if (v == null) throw new Error("sixColorPlanar failed: no vertex with degree <= 5");
+
+    removed.add(v);
+    stack.push(v);
+    for (const u of neighbors.get(v) ?? []) {
+      if (removed.has(u)) continue;
+      const oldD = degree.get(u) ?? 0;
+      buckets[Math.min(5, oldD)].delete(u);
+      const nextD = Math.max(0, oldD - 1);
+      degree.set(u, nextD);
+      buckets[Math.min(5, nextD)].add(u);
+    }
+  }
+
   const color = new Map<number, number>();
-  const uncolored = new Set<number>(nodes);
-
-  const chooseNext = (): number => {
-    let best = nodes[0];
-    let bestSat = -1;
-    let bestDeg = -1;
-    for (const n of uncolored) {
-      const neigh = neighbors.get(n) ?? new Set<number>();
-      const used = new Set<number>();
-      for (const m of neigh) {
-        const c = color.get(m);
-        if (c !== undefined) used.add(c);
-      }
-      const sat = used.size;
-      const deg = neigh.size;
-      if (sat > bestSat || (sat === bestSat && deg > bestDeg)) {
-        best = n;
-        bestSat = sat;
-        bestDeg = deg;
+  while (stack.length > 0) {
+    const v = stack.pop() as number;
+    const used = new Array<boolean>(6).fill(false);
+    for (const u of neighbors.get(v) ?? []) {
+      const c = color.get(u);
+      if (c !== undefined && c >= 0 && c < 6) used[c] = true;
+    }
+    let assigned = -1;
+    for (let c = 0; c < 6; c++) {
+      if (!used[c]) {
+        assigned = c;
+        break;
       }
     }
-    return best;
-  };
-
-  const canUse = (node: number, c: number): boolean => {
-    const neigh = neighbors.get(node);
-    if (!neigh) return true;
-    for (const m of neigh) {
-      if (color.get(m) === c) return false;
-    }
-    return true;
-  };
-
-  const dfs = (): boolean => {
-    if (uncolored.size === 0) return true;
-    const node = chooseNext();
-    uncolored.delete(node);
-    for (let c = 0; c < 5; c++) {
-      if (!canUse(node, c)) continue;
-      color.set(node, c);
-      if (dfs()) return true;
-      color.delete(node);
-    }
-    uncolored.add(node);
-    return false;
-  };
-
-  if (!dfs()) {
-    color.clear();
-    for (const n of nodes) {
-      const used = new Set<number>();
-      const neigh = neighbors.get(n) ?? new Set<number>();
-      for (const m of neigh) {
-        const c = color.get(m);
-        if (c !== undefined) used.add(c);
-      }
-      let c = 0;
-      while (used.has(c)) c++;
-      color.set(n, c);
-    }
+    if (assigned < 0) throw new Error("sixColorPlanar failed: no available color in 0..5");
+    color.set(v, assigned);
   }
   return color;
 }
@@ -225,84 +191,75 @@ function isRichState(state: PolyState | PolyRichState): state is PolyRichState {
 export function buildPolyDerivedCache(stateArg: PolyState | PolyRichState): PolyDerivedCache {
   const rich = isRichState(stateArg) ? stateArg : buildPolyRichState(stateArg);
   const { vertices, faces, facePlanes, aux } = rich;
+  const metrics = computeConstraintMetrics(rich);
 
-  const light = computeConstraintMetrics(rich);
-  const faceNormals: Vec3[] = facePlanes.map((pl) => [pl.n[0], pl.n[1], pl.n[2]]);
-  const faceCentroids: Vec3[] = aux.faceCentroid.map((c) => [c[0], c[1], c[2]]);
+  const faceNormals = facePlanes.map((pl) => [pl.n[0], pl.n[1], pl.n[2]] as Vec3);
+  const faceCentroids = aux.faceCentroid.map((c) => [c[0], c[1], c[2]] as Vec3);
   const centerOfMass: Vec3 = [aux.centerOfMass[0], aux.centerOfMass[1], aux.centerOfMass[2]];
-  const volume = aux.volume;
-  const projectedComByFace: Vec3[] = aux.projectedComByFace.map((p) => [p[0], p[1], p[2]] as Vec3);
+  const projectedComByFace = aux.projectedComByFace.map((p) => [p[0], p[1], p[2]] as Vec3);
 
   const { byEdge, neighbors } = buildFaceAdjacency(faces);
 
-  const stableFace = new Array<boolean>(faces.length).fill(false);
-  const signedMarginByFace = new Array<number>(faces.length).fill(0);
+  const stableFace = new Array<boolean>(faces.length);
+  const signedMarginByFace = new Array<number>(faces.length);
   const nextRollByFace: RollStep[] = new Array(faces.length);
 
   for (let fi = 0; fi < faces.length; fi++) {
-    const q = projectedComByFace[fi];
-    const face = faces[fi];
-    const margin = polygonSignedMargin(vertices, face, facePlanes[fi].n, q);
+    const margin = polygonMargin(vertices, faces[fi], facePlanes[fi].n, projectedComByFace[fi]);
     stableFace[fi] = margin.inside;
     signedMarginByFace[fi] = margin.margin;
-
     if (margin.inside || margin.minEdgeIndex < 0) {
       nextRollByFace[fi] = { nextFace: null, edge: null };
       continue;
     }
-
-    const a = face[margin.minEdgeIndex];
-    const b = face[(margin.minEdgeIndex + 1) % face.length];
+    const a = faces[fi][margin.minEdgeIndex];
+    const b = faces[fi][(margin.minEdgeIndex + 1) % faces[fi].length];
     const owners = byEdge.get(edgeKey(a, b)) ?? [];
-    let next: number | null = null;
-    if (owners.length >= 2) next = owners[0] === fi ? owners[1] : owners[0];
-    nextRollByFace[fi] = { nextFace: next ?? null, edge: [a, b] };
+    const nextFace = owners.length >= 2 ? (owners[0] === fi ? owners[1] : owners[0]) : null;
+    nextRollByFace[fi] = { nextFace, edge: [a, b] };
   }
 
   const settleFaceByFace: Array<number | null> = new Array(faces.length).fill(null);
   const settlePathByFace: number[][] = new Array(faces.length);
   for (let fi = 0; fi < faces.length; fi++) {
-    const visited = new Map<number, number>();
     const path: number[] = [fi];
+    const visited = new Set<number>([fi]);
     let cur = fi;
-    let settled: number | null = null;
-    for (let step = 0; step < faces.length + 2; step++) {
+    while (true) {
       if (stableFace[cur]) {
-        settled = cur;
+        settleFaceByFace[fi] = cur;
         break;
       }
       const next = nextRollByFace[cur].nextFace;
-      if (next == null) break;
-      if (visited.has(next)) {
-        path.push(next);
+      if (next == null || visited.has(next)) {
+        if (next != null) path.push(next);
         break;
       }
-      visited.set(cur, step);
       path.push(next);
+      visited.add(next);
       cur = next;
     }
-    settleFaceByFace[fi] = settled;
     settlePathByFace[fi] = path;
   }
 
-  const faceIds = faces.map((_f, fi) => fi);
+  const faceIds = faces.map((_f, i) => i);
   const faceAdj = new Map<number, Set<number>>();
   for (let fi = 0; fi < faces.length; fi++) faceAdj.set(fi, neighbors[fi]);
-  const defaultColor = fiveColor(faceIds, faceAdj);
+  const defaultColor = sixColorPlanar(faceIds, faceAdj);
   const defaultColorByFace = faceIds.map((fi) => defaultColor.get(fi) ?? 0);
 
-  const basinIdByFace = new Array<number>(faces.length).fill(-1);
+  const basinIdByFace = new Array<number>(faces.length);
   const basinFaces = new Map<number, number[]>();
   for (let fi = 0; fi < faces.length; fi++) {
     const basin = settleFaceByFace[fi] ?? -(fi + 1);
     basinIdByFace[fi] = basin;
-    const arr = basinFaces.get(basin);
-    if (arr) arr.push(fi);
+    const bucket = basinFaces.get(basin);
+    if (bucket) bucket.push(fi);
     else basinFaces.set(basin, [fi]);
   }
 
   const basinAdj = new Map<number, Set<number>>();
-  for (const [bi] of basinFaces) basinAdj.set(bi, new Set<number>());
+  for (const basin of basinFaces.keys()) basinAdj.set(basin, new Set<number>());
   for (let fi = 0; fi < faces.length; fi++) {
     const bi = basinIdByFace[fi];
     for (const fj of neighbors[fi]) {
@@ -312,19 +269,18 @@ export function buildPolyDerivedCache(stateArg: PolyState | PolyRichState): Poly
       basinAdj.get(bj)?.add(bi);
     }
   }
-
-  const basinColor = fiveColor([...basinFaces.keys()], basinAdj);
-  const basinColorByFace = basinIdByFace.map((bid) => basinColor.get(bid) ?? 0);
+  const basinColor = sixColorPlanar([...basinFaces.keys()], basinAdj);
+  const basinColorByFace = basinIdByFace.map((basin) => basinColor.get(basin) ?? 0);
 
   return {
-    planarityMetric: light.planarityMetric,
-    unitNormalityMetric: light.unitNormalityMetric,
-    convexityViolation: light.convexityViolation,
-    isConvex: light.isConvex,
+    planarityMetric: metrics.planarityMetric,
+    unitNormalityMetric: metrics.unitNormalityMetric,
+    convexityViolation: metrics.convexityViolation,
+    isConvex: metrics.isConvex,
     faceNormals,
     faceCentroids,
     centerOfMass,
-    volume,
+    volume: aux.volume,
     projectedComByFace,
     stableFace,
     signedMarginByFace,

@@ -63,6 +63,7 @@ const basinPalette = [
   new THREE.Color("#6ecb63"),
   new THREE.Color("#f6ae2d"),
   new THREE.Color("#7d5ba6"),
+  new THREE.Color("#2a9d8f"),
 ];
 
 function zoomStepFromDistance(dist: number): number {
