@@ -87,6 +87,7 @@ export function useThreePolyhedronScene(
   initialVertices: Vec3[]
 ): ThreeSceneAPI | null {
   const topologyKey = useMemo(() => JSON.stringify(faces), [faces]);
+  const facesForTopology = useMemo(() => JSON.parse(topologyKey) as number[][], [topologyKey]);
   const initialVerticesRef = React.useRef<Vec3[]>(initialVertices.map((p) => [p[0], p[1], p[2]] as Vec3));
   const [api, setApi] = useState<ThreeSceneAPI | null>(null);
 
@@ -186,8 +187,8 @@ export function useThreePolyhedronScene(
     // --- Triangulate polygon faces (fan triangulation)
     const triangles: number[][] = [];
     const triToFace: number[] = [];
-    for (let fi = 0; fi < faces.length; fi++) {
-      const f = faces[fi];
+    for (let fi = 0; fi < facesForTopology.length; fi++) {
+      const f = facesForTopology[fi];
       if (f.length < 3) continue;
       for (let i = 1; i + 1 < f.length; i++) {
         triangles.push([f[0], f[i], f[i + 1]]);
@@ -279,7 +280,7 @@ export function useThreePolyhedronScene(
 
     const edgeSet = new Set<string>();
     const edges: Array<[number, number]> = [];
-    for (const cyc of faces) {
+    for (const cyc of facesForTopology) {
       for (let i = 0; i < cyc.length; i++) {
         const a = cyc[i];
         const b = cyc[(i + 1) % cyc.length];
@@ -358,8 +359,8 @@ export function useThreePolyhedronScene(
     };
 
     const computeFaceNormalAndPoint = (fi: number, baseline: ReadonlyArray<Vec3>): { normal: THREE.Vector3; point: THREE.Vector3 } | null => {
-      if (fi < 0 || fi >= faces.length) return null;
-      const cyc = faces[fi];
+      if (fi < 0 || fi >= facesForTopology.length) return null;
+      const cyc = facesForTopology[fi];
       if (cyc.length < 3) return null;
       const nrm = new THREE.Vector3(0, 0, 0);
       const cen = new THREE.Vector3(0, 0, 0);
@@ -417,7 +418,7 @@ export function useThreePolyhedronScene(
       }
 
       if (currentOverlayOptions.showProjections) {
-        for (let fi = 0; fi < faces.length; fi++) {
+        for (let fi = 0; fi < facesForTopology.length; fi++) {
           const p = currentDerived.projectedComByFace[fi];
           const stable = currentDerived.stableFace[fi] ?? false;
           const g = new THREE.SphereGeometry(0.03, 10, 8);
@@ -429,7 +430,7 @@ export function useThreePolyhedronScene(
       }
 
       if (currentOverlayOptions.showNormals) {
-        for (let fi = 0; fi < faces.length; fi++) {
+        for (let fi = 0; fi < facesForTopology.length; fi++) {
           const n = currentDerived.faceNormals[fi];
           const c = currentDerived.faceCentroids[fi];
           if (!n || !c) continue;
@@ -458,7 +459,6 @@ export function useThreePolyhedronScene(
       writeEdgePositions(X);
       (edgeGeom.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
       for (let i = 0; i < n; i++) vMeshes[i].position.set(X[i][0], X[i][1], X[i][2]);
-      rebuildAnalysisOverlay();
     };
 
     const resize = () => {
@@ -573,7 +573,7 @@ export function useThreePolyhedronScene(
       setApi(null);
       dispose();
     };
-  }, [topologyKey, mountRef, faces]);
+  }, [topologyKey, mountRef, facesForTopology]);
 
   useEffect(() => {
     if (!api) return;

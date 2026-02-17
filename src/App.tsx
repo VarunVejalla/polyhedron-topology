@@ -25,7 +25,6 @@ export default function App() {
   const [isComputing, setIsComputing] = useState(false);
   const [threeOnlyHeight, setThreeOnlyHeight] = useState<number | null>(null);
   const prismRef = useRef<PrismEditorHandle | null>(null);
-  const polyTopologyKey = useMemo(() => JSON.stringify(doc.poly.faces), [doc.poly.faces]);
   const mainRowRef = useRef<HTMLDivElement | null>(null);
 
   const undo = () => dispatch({ type: "UNDO" });
@@ -457,7 +456,6 @@ export default function App() {
         {doc.ui.show3D && (
           <div className="rightPane" style={doc.ui.show3D && !doc.ui.showGraphs && threeOnlyHeight ? { height: `${threeOnlyHeight}px` } : undefined}>
             <PrismEditor
-              key={polyTopologyKey}
               ref={prismRef}
               initialVertices={doc.poly.vertices}
               faces={doc.poly.faces}

@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "react";
 
 import type { Vec3 } from "../engine/math/types";
 import type { ProjectorParams, ProjectionMethod } from "../engine/projection";
@@ -80,6 +80,10 @@ export const PrismEditor = forwardRef<PrismEditorHandle, Props>(function PrismEd
   ref
 ) {
   const mountRef = useRef<HTMLDivElement>(null);
+  const overlayOptions = useMemo(
+    () => ({ showNormals, showCom, showProjections, showStability, showBasins }),
+    [showNormals, showCom, showProjections, showStability, showBasins]
+  );
 
   const controller = useProjectionController(initialVertices, faces, method, params);
   const scene = useThreePolyhedronScene(mountRef, faces, initialVertices);
@@ -87,7 +91,7 @@ export const PrismEditor = forwardRef<PrismEditorHandle, Props>(function PrismEd
   const interaction = usePolyhedronInteraction(
     scene,
     controller,
-    { showNormals, showCom, showProjections, showStability, showBasins },
+    overlayOptions,
     hardProject.mode,
     hardProject.maxIters,
     hardProject.tolPlanar,
