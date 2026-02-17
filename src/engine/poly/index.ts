@@ -13,6 +13,7 @@ export {
   lightVertexDim,
   lightFullDim,
   lightNBase,
+  lightBIndex,
   readLightVertex,
   packPolyLightState,
   unpackPolyLightState,
@@ -26,14 +27,5 @@ export {
   nonIncidenceConstraintValue,
   squaredSlackNonIncidenceConstraintLinearization,
   unitNormalConstraintValue,
+  unitNormalConstraintLinearization,
 } from "./lightConstraints";
-export {
-  pushSparseTriplet,
-  rowsApplyJ,
-  rowsApplyJT,
-  pushIncidenceGradientTriplets,
-  buildIncidenceSparseRow,
-  buildUnitNormalSparseRow,
-  buildSquaredSlackNonIncidenceSparseRow,
-  type SparseRow,
-} from "./lightSparseRows";
