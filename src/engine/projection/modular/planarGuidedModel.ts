@@ -7,26 +7,24 @@ import {
   lightVertexDim,
   nonIncidenceConstraintValue,
   packPolyLightState,
-  incidenceConstraintValue,
-  squaredSlackNonIncidenceConstraintLinearization,
-  unitNormalConstraintValue,
-  buildIncidenceSparseRow,
-  buildSquaredSlackNonIncidenceSparseRow,
-  buildUnitNormalSparseRow,
-  rowsApplyJ,
-  rowsApplyJT,
-  type SparseRow,
   type PolyState,
   type VertexFaceIncidence,
 } from "../../poly";
+import {
+  makeLocalQuadraticFromValueGradDiag,
+  sparseSymmetricOperator,
+} from "../../optimization/quadratic";
+import type {
+  OptimizationProblem,
+  ProblemBuilder,
+  QuadraticConstraint,
+  SymmetricEntry,
+} from "../../optimization/types";
 import type { HandleSet } from "../index";
 import { sumSquaredPlanarityResidual } from "../shared/metrics";
 import { evaluateVertexTrackingObjectiveAndGradient } from "../shared/regularity";
-import type { ConstraintLinearization, MetaModel, MetaModelBuilder, MetaState } from "./types";
 
-type NonIncidence = VertexFaceIncidence & {
-  di: number;
-};
+type NonIncidence = VertexFaceIncidence & { di: number };
 
 export type ModularConstraintMode = "inc_unit" | "inc_noninc_unit_squared_slack";
 
@@ -70,7 +68,10 @@ function initializeSquaredSlackValues(
   return d;
 }
 
-export function orientInitialNormalsOutward(faces: ReadonlyArray<ReadonlyArray<number>>, x: ReadonlyArray<Vec3>): { normals: Vec3[]; offsets: number[] } {
+export function orientInitialNormalsOutward(
+  faces: ReadonlyArray<ReadonlyArray<number>>,
+  x: ReadonlyArray<Vec3>
+): { normals: Vec3[]; offsets: number[] } {
   const center: Vec3 = [0, 0, 0];
   for (let i = 0; i < x.length; i++) {
     center[0] += x[i][0];
@@ -102,16 +103,14 @@ export function orientInitialNormalsOutward(faces: ReadonlyArray<ReadonlyArray<n
   return { normals, offsets };
 }
 
-export function countPlanarGuidedHardConstraints(
+function countPlanarGuidedHardConstraints(
   faces: ReadonlyArray<ReadonlyArray<number>>,
   vertexCount: number,
   mode: ModularConstraintMode
 ): number {
   const topology = buildPolyTopology(faces, vertexCount);
   const mInc = topology.incidencePairs.length;
-  if (mode === "inc_noninc_unit_squared_slack") {
-    return mInc + topology.nonIncidencePairs.length + faces.length;
-  }
+  if (mode === "inc_noninc_unit_squared_slack") return mInc + topology.nonIncidencePairs.length + faces.length;
   return mInc + faces.length;
 }
 
@@ -132,9 +131,7 @@ export function packPlanarGuidedY(
   if (mode !== "inc_noninc_unit_squared_slack") return base;
 
   const nonInc = buildPolyTopology(faces, vertices.length).nonIncidencePairs.map((pair, di) => ({ ...pair, di }));
-  const dVals = initialD
-    ? [...initialD]
-    : initializeSquaredSlackValues(base, vertices.length, nonInc);
+  const dVals = initialD ? [...initialD] : initializeSquaredSlackValues(base, vertices.length, nonInc);
 
   const out = new Array<number>(base.length + nonInc.length);
   for (let i = 0; i < base.length; i++) out[i] = base[i];
@@ -177,7 +174,67 @@ export function computeTotalPlanarityViolation(
   return sumSquaredPlanarityResidual(faces, positions);
 }
 
-export class PlanarGuidedModelBuilder implements MetaModelBuilder {
+function addIncidenceEntries(entries: SymmetricEntry[], vi: number, vertexCount: number, fi: number) {
+  const vb = 3 * vi;
+  const nb = lightNBase(vertexCount, fi);
+  for (let axis = 0; axis < 3; axis++) {
+    const i = vb + axis;
+    const j = nb + axis;
+    entries.push({ i: Math.min(i, j), j: Math.max(i, j), value: 1 });
+  }
+}
+
+function incidenceConstraint(
+  dim: number,
+  vertexCount: number,
+  pair: VertexFaceIncidence
+): QuadraticConstraint {
+  const entries: SymmetricEntry[] = [];
+  addIncidenceEntries(entries, pair.vi, vertexCount, pair.fi);
+  const b = new Array<number>(dim).fill(0);
+  b[lightNBase(vertexCount, pair.fi) + 3] = -1;
+  return {
+    id: `inc:${pair.fi}:${pair.vi}`,
+    sense: "eq",
+    source: "exact",
+    form: { dim, A: sparseSymmetricOperator(dim, entries), b, c: 0 },
+  };
+}
+
+function squaredSlackNonIncidenceConstraint(
+  dim: number,
+  vertexCount: number,
+  pair: NonIncidence,
+  dIndex: number
+): QuadraticConstraint {
+  const entries: SymmetricEntry[] = [{ i: dIndex, j: dIndex, value: 2 }];
+  addIncidenceEntries(entries, pair.vi, vertexCount, pair.fi);
+  const b = new Array<number>(dim).fill(0);
+  b[lightNBase(vertexCount, pair.fi) + 3] = -1;
+  return {
+    id: `noninc_sq_slack:${pair.fi}:${pair.vi}:${pair.di}`,
+    sense: "eq",
+    source: "exact",
+    form: { dim, A: sparseSymmetricOperator(dim, entries), b, c: 0 },
+  };
+}
+
+function unitNormalConstraint(dim: number, vertexCount: number, fi: number): QuadraticConstraint {
+  const nb = lightNBase(vertexCount, fi);
+  const entries: SymmetricEntry[] = [
+    { i: nb, j: nb, value: 2 },
+    { i: nb + 1, j: nb + 1, value: 2 },
+    { i: nb + 2, j: nb + 2, value: 2 },
+  ];
+  return {
+    id: `unit:${fi}`,
+    sense: "eq",
+    source: "exact",
+    form: { dim, A: sparseSymmetricOperator(dim, entries), b: new Array<number>(dim).fill(0), c: -1 },
+  };
+}
+
+export class PlanarGuidedProblemBuilder implements ProblemBuilder<void> {
   private faces: number[][];
   private topology = buildPolyTopology([], 0);
   private x0: Vec3[];
@@ -222,6 +279,10 @@ export class PlanarGuidedModelBuilder implements MetaModelBuilder {
     return countPlanarGuidedHardConstraints(this.faces, this.x0.length, this.mode);
   }
 
+  initializeContext(): void {
+    return;
+  }
+
   private buildPairs() {
     this.incidences = this.topology.incidencePairs.map((pair) => ({ fi: pair.fi, vi: pair.vi }));
     this.nonIncidences = this.mode === "inc_noninc_unit_squared_slack"
@@ -245,53 +306,6 @@ export class PlanarGuidedModelBuilder implements MetaModelBuilder {
     return this.dBase() + di;
   }
 
-  private linearizeConstraints(y: ReadonlyArray<number>): ConstraintLinearization {
-    const mInc = this.incidences.length;
-    const mNon = this.nonIncidences.length;
-    const rows: SparseRow[] = new Array(mInc + mNon + this.faces.length);
-
-    for (let ri = 0; ri < mInc; ri++) {
-      const pair = this.incidences[ri];
-      rows[ri] = buildIncidenceSparseRow(y, this.x0.length, pair);
-    }
-
-    for (let qi = 0; qi < mNon; qi++) {
-      const rowIndex = mInc + qi;
-      const pair = this.nonIncidences[qi];
-      const d = y[this.dIndex(pair.di)];
-      rows[rowIndex] = buildSquaredSlackNonIncidenceSparseRow(y, this.x0.length, pair, d, this.dIndex(pair.di));
-    }
-
-    for (let fi = 0; fi < this.faces.length; fi++) {
-      rows[mInc + mNon + fi] = buildUnitNormalSparseRow(y, this.x0.length, fi);
-    }
-
-    return {
-      c0: rows.map((r) => r.c),
-      applyJ: (v: ReadonlyArray<number>) => rowsApplyJ(rows, v),
-      applyJT: (w: ReadonlyArray<number>) => rowsApplyJT(rows, w, this.fullDim()),
-    };
-  }
-
-  private evalConstraintsOnly(y: ReadonlyArray<number>): number[] {
-    const mInc = this.incidences.length;
-    const mNon = this.nonIncidences.length;
-    const out = new Array<number>(mInc + mNon + this.faces.length);
-    for (let ri = 0; ri < mInc; ri++) {
-      out[ri] = incidenceConstraintValue(y, this.x0.length, this.incidences[ri]);
-    }
-    for (let qi = 0; qi < mNon; qi++) {
-      const rowIndex = mInc + qi;
-      const pair = this.nonIncidences[qi];
-      const d = y[this.dIndex(pair.di)];
-      out[rowIndex] = squaredSlackNonIncidenceConstraintLinearization(y, this.x0.length, pair, d).value;
-    }
-    for (let fi = 0; fi < this.faces.length; fi++) {
-      out[mInc + mNon + fi] = unitNormalConstraintValue(y, this.x0.length, fi);
-    }
-    return out;
-  }
-
   private objectiveAndGradient(y: ReadonlyArray<number>, gradOut?: number[]): number {
     const f = evaluateVertexTrackingObjectiveAndGradient(
       y,
@@ -312,8 +326,7 @@ export class PlanarGuidedModelBuilder implements MetaModelBuilder {
     return f;
   }
 
-  build(_state: Readonly<MetaState>): MetaModel {
-    const y = _state.y;
+  private buildObjectiveQuadratic(y: ReadonlyArray<number>) {
     const yRef = this.yRefProvider();
     const dim = this.fullDim();
     const tau = Math.max(1e-10, this.params.tau ?? 1e-6);
@@ -322,25 +335,39 @@ export class PlanarGuidedModelBuilder implements MetaModelBuilder {
     const offsetProxWeight = Math.max(0, this.params.offsetProxWeight ?? 1);
 
     const gradient = new Array<number>(dim).fill(0);
-    this.objectiveAndGradient(y, gradient);
+    let value = this.objectiveAndGradient(y, gradient);
 
     if (proxWeight > 0) {
+      let proxV = 0;
       for (let i = 0; i < this.x0.length; i++) {
         const b = 3 * i;
-        gradient[b] += proxWeight * (y[b] - this.x0[i][0]);
-        gradient[b + 1] += proxWeight * (y[b + 1] - this.x0[i][1]);
-        gradient[b + 2] += proxWeight * (y[b + 2] - this.x0[i][2]);
+        const dx = y[b] - this.x0[i][0];
+        const dy = y[b + 1] - this.x0[i][1];
+        const dz = y[b + 2] - this.x0[i][2];
+        gradient[b] += proxWeight * dx;
+        gradient[b + 1] += proxWeight * dy;
+        gradient[b + 2] += proxWeight * dz;
+        proxV += dx * dx + dy * dy + dz * dz;
       }
+      value += 0.5 * proxWeight * proxV;
     }
 
     if (normalProxWeight > 0 || offsetProxWeight > 0) {
+      let proxNB = 0;
       for (let fi = 0; fi < this.faces.length; fi++) {
         const nb = lightNBase(this.x0.length, fi);
-        gradient[nb] += normalProxWeight * (y[nb] - yRef[nb]);
-        gradient[nb + 1] += normalProxWeight * (y[nb + 1] - yRef[nb + 1]);
-        gradient[nb + 2] += normalProxWeight * (y[nb + 2] - yRef[nb + 2]);
-        gradient[nb + 3] += offsetProxWeight * (y[nb + 3] - yRef[nb + 3]);
+        const dnx = y[nb] - yRef[nb];
+        const dny = y[nb + 1] - yRef[nb + 1];
+        const dnz = y[nb + 2] - yRef[nb + 2];
+        const db = y[nb + 3] - yRef[nb + 3];
+        gradient[nb] += normalProxWeight * dnx;
+        gradient[nb + 1] += normalProxWeight * dny;
+        gradient[nb + 2] += normalProxWeight * dnz;
+        gradient[nb + 3] += offsetProxWeight * db;
+        proxNB += normalProxWeight * (dnx * dnx + dny * dny + dnz * dnz);
+        proxNB += offsetProxWeight * db * db;
       }
+      value += 0.5 * proxNB;
     }
 
     const hDiag = new Array<number>(dim).fill(tau);
@@ -361,54 +388,64 @@ export class PlanarGuidedModelBuilder implements MetaModelBuilder {
       hDiag[nb + 3] += offsetProxWeight;
     }
 
-    const linearization = this.linearizeConstraints(y);
     return {
-      dim,
-      gradient,
-      hDiag,
-      hard: {
-        linearization,
-        evaluate: (yy: ReadonlyArray<number>) => this.evalConstraintsOnly(yy),
-      },
-      merit: (yy: ReadonlyArray<number>, u: ReadonlyArray<number>, rho: number) => {
-        const f = this.objectiveAndGradient(yy);
-        const c = this.evalConstraintsOnly(yy);
-        let pen = 0;
-        for (let i = 0; i < c.length; i++) {
-          const t = c[i] + u[i];
-          pen += t * t;
-        }
-
+      metric: makeLocalQuadraticFromValueGradDiag(y, value, gradient, hDiag),
+      objectiveValueOverride: (x: ReadonlyArray<number>) => {
+        const base = this.objectiveAndGradient(x);
         let proxV = 0;
         if (proxWeight > 0) {
           for (let i = 0; i < this.x0.length; i++) {
             const b = 3 * i;
-            const dx = yy[b] - this.x0[i][0];
-            const dy = yy[b + 1] - this.x0[i][1];
-            const dz = yy[b + 2] - this.x0[i][2];
+            const dx = x[b] - this.x0[i][0];
+            const dy = x[b + 1] - this.x0[i][1];
+            const dz = x[b + 2] - this.x0[i][2];
             proxV += dx * dx + dy * dy + dz * dz;
           }
         }
-
         let proxNB = 0;
         if (normalProxWeight > 0 || offsetProxWeight > 0) {
           for (let fi = 0; fi < this.faces.length; fi++) {
             const nb = lightNBase(this.x0.length, fi);
-            const dnx = yy[nb] - yRef[nb];
-            const dny = yy[nb + 1] - yRef[nb + 1];
-            const dnz = yy[nb + 2] - yRef[nb + 2];
-            const db = yy[nb + 3] - yRef[nb + 3];
+            const dnx = x[nb] - yRef[nb];
+            const dny = x[nb + 1] - yRef[nb + 1];
+            const dnz = x[nb + 2] - yRef[nb + 2];
+            const db = x[nb + 3] - yRef[nb + 3];
             proxNB += normalProxWeight * (dnx * dnx + dny * dny + dnz * dnz);
             proxNB += offsetProxWeight * db * db;
           }
         }
-
-        return f + 0.5 * rho * pen + 0.5 * proxWeight * proxV + 0.5 * proxNB;
+        return base + 0.5 * proxWeight * proxV + 0.5 * proxNB;
       },
     };
   }
+
+  buildProblem(xRef: ReadonlyArray<number>): OptimizationProblem {
+    const dim = this.fullDim();
+    const exactEq: QuadraticConstraint[] = [];
+
+    for (let i = 0; i < this.incidences.length; i++) {
+      exactEq.push(incidenceConstraint(dim, this.x0.length, this.incidences[i]));
+    }
+    for (let i = 0; i < this.nonIncidences.length; i++) {
+      const p = this.nonIncidences[i];
+      const dIndex = this.dIndex(p.di);
+      exactEq.push(squaredSlackNonIncidenceConstraint(dim, this.x0.length, p, dIndex));
+    }
+    for (let fi = 0; fi < this.faces.length; fi++) {
+      exactEq.push(unitNormalConstraint(dim, this.x0.length, fi));
+    }
+
+    const objective = this.buildObjectiveQuadratic(xRef);
+
+    return {
+      dim,
+      xRef: [...xRef],
+      exactEq,
+      exactLe: [],
+      localEq: [],
+      localLe: [],
+      metric: objective.metric,
+      objectiveValueOverride: objective.objectiveValueOverride,
+    };
+  }
 }
-
-
-
-

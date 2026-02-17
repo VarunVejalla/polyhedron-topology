@@ -1,24 +1,17 @@
 import type { Vec3 } from "../math/types";
+import { PiecewiseOptimizationController } from "../optimization/controller";
+import { LinearizedAlmKernel } from "../optimization/kernels/linearizedAlmKernel";
+import type { OptimizerHyperParams } from "../optimization/types";
 import type { HandleSet, IProjector } from "./index";
-import { LinearizedAlmEngine } from "./modular/engines/linearizedAlmEngine";
 import {
   computeTotalPlanarityViolation,
-  countPlanarGuidedHardConstraints,
   type ModularConstraintMode,
   ModularGuidedALMParams,
   orientInitialNormalsOutward,
   packPlanarGuidedY,
-  PlanarGuidedModelBuilder,
+  PlanarGuidedProblemBuilder,
   unpackPlanarGuidedY,
 } from "./modular/planarGuidedModel";
-import {
-  createArmijoGlobalizer,
-  createResidualBalancePenaltyPolicy,
-  neverStopPolicy,
-  scaledDualUpdater,
-} from "./modular/policies";
-import { runMetaSolver } from "./modular/solver";
-import type { MetaState } from "./modular/types";
 
 export type ModularProjectorParams = ModularGuidedALMParams;
 
@@ -31,11 +24,10 @@ export class ModularPlanarProjector implements IProjector {
   private params: ModularProjectorParams;
   private handles: HandleSet = { targets: new Map() };
   private lastTotalViolation = 0;
-
-  private state: MetaState = { y: [], u: [], rho: 1 };
   private stepYRef: number[] = [];
-  private builder: PlanarGuidedModelBuilder;
-  private engine: LinearizedAlmEngine;
+  private builder: PlanarGuidedProblemBuilder;
+  private kernel: LinearizedAlmKernel;
+  private controller!: PiecewiseOptimizationController<void>;
 
   private mode(): ModularConstraintMode {
     return this.params.constraintMode ?? "inc_unit";
@@ -44,11 +36,8 @@ export class ModularPlanarProjector implements IProjector {
   constructor(faces: number[][], x0: Vec3[], params: ModularProjectorParams) {
     this.faces = faces.map((f) => [...f]);
     this.params = { ...params };
-    this.engine = new LinearizedAlmEngine({
-      cgIters: Math.max(4, Math.floor(this.params.cgIters ?? 80)),
-      cgTol: Math.max(1e-10, this.params.cgTol ?? 1e-6),
-    });
-    this.builder = new PlanarGuidedModelBuilder(
+    this.kernel = new LinearizedAlmKernel();
+    this.builder = new PlanarGuidedProblemBuilder(
       this.faces,
       x0,
       this.params,
@@ -57,6 +46,24 @@ export class ModularPlanarProjector implements IProjector {
       this.mode()
     );
     this.reset(x0);
+  }
+
+  private hyperParams(): OptimizerHyperParams {
+    return {
+      rho: this.params.rho,
+      tau: this.params.tau ?? 1e-6,
+      cgIters: this.params.cgIters ?? 80,
+      cgTol: this.params.cgTol ?? 1e-6,
+      lineSearchC1: this.params.lineSearchC1 ?? 1e-4,
+      lineSearchShrink: this.params.lineSearchShrink ?? 0.5,
+      lineSearchMaxSteps: this.params.lineSearchMaxSteps ?? 8,
+      adaptRho: this.params.adaptRho ?? false,
+      rhoIncrease: this.params.rhoIncrease ?? 2,
+      rhoDecrease: this.params.rhoDecrease ?? 2,
+      rhoResidualRatio: this.params.rhoResidualRatio ?? 10,
+      rhoMin: this.params.rhoMin ?? 1e-3,
+      rhoMax: this.params.rhoMax ?? 1e8,
+    };
   }
 
   reset(x0: Vec3[]) {
@@ -68,17 +75,22 @@ export class ModularPlanarProjector implements IProjector {
     this.offsets = oriented.offsets;
 
     const y = packPlanarGuidedY(this.x, this.normals, this.offsets, this.mode(), this.faces);
-    this.state = {
-      y,
-      u: new Array<number>(countPlanarGuidedHardConstraints(this.faces, this.x.length, this.mode())).fill(0),
-      rho: this.params.rho,
-    };
     this.stepYRef = y.slice();
 
     this.builder.setBaseline(this.x0);
     this.builder.setParams(this.params);
     this.builder.setHandles(this.handles);
+    this.controller = new PiecewiseOptimizationController<void>({
+      builder: this.builder,
+      kernel: this.kernel,
+      x0: y,
+      hyperParams: this.hyperParams(),
+    });
 
+    const unpacked = unpackPlanarGuidedY(y, this.x0.length, this.faces.length, this.mode(), this.faces);
+    this.x = unpacked.vertices;
+    this.normals = unpacked.normals;
+    this.offsets = unpacked.offsets;
     this.lastTotalViolation = computeTotalPlanarityViolation(this.faces, this.x);
   }
 
@@ -90,10 +102,9 @@ export class ModularPlanarProjector implements IProjector {
   setParams(next: Partial<ModularProjectorParams>) {
     const prevMode = this.mode();
     this.params = { ...this.params, ...next };
-    if (next.rho !== undefined) this.state.rho = next.rho;
     const nextMode = this.mode();
     if (prevMode !== nextMode) {
-      this.builder = new PlanarGuidedModelBuilder(
+      this.builder = new PlanarGuidedProblemBuilder(
         this.faces,
         this.x0,
         this.params,
@@ -105,10 +116,12 @@ export class ModularPlanarProjector implements IProjector {
       return;
     }
     this.builder.setParams(next);
+    this.controller.setHyperParams(this.hyperParams());
   }
 
   private syncStateToViews() {
-    const unpacked = unpackPlanarGuidedY(this.state.y, this.x0.length, this.faces.length, this.mode(), this.faces);
+    const y = this.controller.getXRef();
+    const unpacked = unpackPlanarGuidedY(y, this.x0.length, this.faces.length, this.mode(), this.faces);
     this.x = unpacked.vertices;
     this.normals = unpacked.normals;
     this.offsets = unpacked.offsets;
@@ -118,49 +131,16 @@ export class ModularPlanarProjector implements IProjector {
     if (iterations <= 0) return;
     if (this.faces.length === 0 || this.x0.length === 0) return;
 
-    this.stepYRef = this.state.y.slice();
+    this.stepYRef = [...this.controller.getXRef()];
     this.builder.setParams(this.params);
     this.builder.setHandles(this.handles);
-    this.engine.setParams({
-      cgIters: Math.max(4, Math.floor(this.params.cgIters ?? 80)),
-      cgTol: Math.max(1e-10, this.params.cgTol ?? 1e-6),
-    });
+    this.controller.setHyperParams(this.hyperParams());
 
-    const lineSearchC1 = this.params.lineSearchC1 ?? 1e-4;
-    const lineSearchShrink = Math.min(0.95, Math.max(0.1, this.params.lineSearchShrink ?? 0.5));
-    const lineSearchMaxSteps = Math.max(1, Math.floor(this.params.lineSearchMaxSteps ?? 8));
     const minAcceptedAlpha = Math.max(0, Math.min(1, this.params.minAcceptedAlpha ?? 1e-4));
-
-    const globalizer = createArmijoGlobalizer({
-      c1: lineSearchC1,
-      shrink: lineSearchShrink,
-      maxSteps: lineSearchMaxSteps,
-    });
-
-    const penaltyPolicy = createResidualBalancePenaltyPolicy({
-      enabled: this.params.adaptRho ?? false,
-      increase: Math.max(1.01, this.params.rhoIncrease ?? 2),
-      decrease: Math.max(1.01, this.params.rhoDecrease ?? 2),
-      ratio: Math.max(1.1, this.params.rhoResidualRatio ?? 10),
-      min: Math.max(1e-8, this.params.rhoMin ?? 1e-3),
-      max: Math.max(Math.max(1e-8, this.params.rhoMin ?? 1e-3), this.params.rhoMax ?? 1e8),
-    });
-
-    const stats = runMetaSolver(
-      this.state,
-      this.builder,
-      this.engine,
-      globalizer,
-      scaledDualUpdater,
-      penaltyPolicy,
-      neverStopPolicy,
-      iterations
-    );
-
-    // If line search collapsed this frame, keep previous state (compatibility with current guided_alm behavior).
+    const stats = this.controller.step(iterations);
     if (stats.accepted === 0 || stats.lastAlpha < minAcceptedAlpha) return;
 
-    this.params.rho = this.state.rho;
+    this.params.rho = this.controller.getMutableState().rho;
     this.syncStateToViews();
     this.lastTotalViolation = computeTotalPlanarityViolation(this.faces, this.x);
   }
@@ -177,4 +157,3 @@ export class ModularPlanarProjector implements IProjector {
     return { totalPlanarityViolation: this.lastTotalViolation };
   }
 }
-

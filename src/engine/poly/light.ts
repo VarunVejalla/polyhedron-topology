@@ -1,6 +1,6 @@
 import type { Vec3 } from "../math/types";
 import { buildPolyTopology } from "./topology";
-import type { PlaneEq, PolyState, PolyTopologyData } from "./types";
+import type { PolyState, PolyTopologyData } from "./types";
 
 function dot3(a: ReadonlyArray<number>, b: ReadonlyArray<number>): number {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -30,7 +30,7 @@ export function lightNBase(vertexCount: number, fi: number): number {
   return lightVertexDim(vertexCount) + 4 * fi;
 }
 
-export function lightBIndex(vertexCount: number, fi: number): number {
+function lightBIndex(vertexCount: number, fi: number): number {
   return lightNBase(vertexCount, fi) + 3;
 }
 
@@ -65,31 +65,6 @@ export function packPolyLightState(state: PolyState): number[] {
     out[nb + 3] = pl.b;
   }
   return out;
-}
-
-export function unpackPolyLightState(
-  y: ReadonlyArray<number>,
-  faces: ReadonlyArray<ReadonlyArray<number>>,
-  vertexCount: number
-): PolyState {
-  const vertices: Vec3[] = new Array(vertexCount);
-  const facePlanes: PlaneEq[] = new Array(faces.length);
-  for (let i = 0; i < vertexCount; i++) {
-    const b = 3 * i;
-    vertices[i] = [y[b], y[b + 1], y[b + 2]];
-  }
-  for (let fi = 0; fi < faces.length; fi++) {
-    const nb = lightNBase(vertexCount, fi);
-    facePlanes[fi] = {
-      n: [y[nb], y[nb + 1], y[nb + 2]],
-      b: y[nb + 3],
-    };
-  }
-  return {
-    vertices,
-    faces: faces.map((f) => [...f]),
-    facePlanes,
-  };
 }
 
 export function buildPolyLightModelFromState(state: PolyState): PolyLightModel {
