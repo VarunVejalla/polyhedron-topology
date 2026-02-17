@@ -1,22 +1,7 @@
-import { bestFitPlanePCA } from "../geom/plane";
+import { bestFitPlanePCA } from "../math/plane";
 import type { Vec3 } from "../math/types";
+import { averageVertices, dot3 } from "./math";
 import type { PlaneEq, PolyState } from "./types";
-
-function dot3(a: ReadonlyArray<number>, b: ReadonlyArray<number>): number {
-  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-}
-
-function averageVertices(vertices: ReadonlyArray<Vec3>): Vec3 {
-  const c: Vec3 = [0, 0, 0];
-  if (vertices.length === 0) return c;
-  for (let i = 0; i < vertices.length; i++) {
-    c[0] += vertices[i][0];
-    c[1] += vertices[i][1];
-    c[2] += vertices[i][2];
-  }
-  const inv = 1 / vertices.length;
-  return [c[0] * inv, c[1] * inv, c[2] * inv];
-}
 
 function computeFacePlanes(
   vertices: ReadonlyArray<Vec3>,

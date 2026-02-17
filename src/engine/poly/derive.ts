@@ -1,22 +1,7 @@
 import type { Vec3 } from "../math/types";
 import { buildPolyRichState } from "./auxiliary";
+import { cross3, dot3, sub3 } from "./math";
 import type { PolyDerivedCache, PolyRichState, PolyState, RollStep } from "./types";
-
-function dot3(a: ReadonlyArray<number>, b: ReadonlyArray<number>): number {
-  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-}
-
-function sub3(a: ReadonlyArray<number>, b: ReadonlyArray<number>): Vec3 {
-  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-}
-
-function cross3(a: ReadonlyArray<number>, b: ReadonlyArray<number>): Vec3 {
-  return [
-    a[1] * b[2] - a[2] * b[1],
-    a[2] * b[0] - a[0] * b[2],
-    a[0] * b[1] - a[1] * b[0],
-  ];
-}
 
 function edgeKey(a: number, b: number): string {
   return a < b ? `${a},${b}` : `${b},${a}`;

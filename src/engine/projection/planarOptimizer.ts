@@ -1,4 +1,4 @@
-import type { Plane } from "../geom/plane";
+import type { Plane } from "../math/plane";
 import type { Vec3 } from "../math/types";
 import { evaluateQuadratic, quadraticizeAt, zeroQuadratic } from "../optimization/quadratic";
 import { OptimizerSession } from "../optimization/session";

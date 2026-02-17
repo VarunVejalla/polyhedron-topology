@@ -1,4 +1,4 @@
-import { bestFitPlanePCA, type Plane } from "../geom/plane";
+import { bestFitPlanePCA, type Plane } from "../math/plane";
 import type { Vec3 } from "../math/types";
 
 type VertexIncidence = Array<Array<{ fi: number; li: number }>>;

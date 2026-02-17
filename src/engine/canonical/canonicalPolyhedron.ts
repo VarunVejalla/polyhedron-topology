@@ -2,7 +2,7 @@ import type { SimpleGraph, NodeId } from "../../graph/types";
 import type { Vec3 } from "../math/types";
 import { v3 } from "../math/vec3";
 import { EPS_AREA } from "../math/constants";
-import { bestFitPlanePCA, planarityResiduals, projectPointToPlane } from "../geom/plane";
+import { bestFitPlanePCA, planarityResiduals, projectPointToPlane } from "../math/plane";
 
 
 type CanonicalBuildInput = {
