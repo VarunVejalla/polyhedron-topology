@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { Vec3 } from "../../engine/math/types";
 import { createProjector, type IProjector, type ProjectorParams, type ProjectionMethod } from "../../engine/projection";
-import { buildPolyDerivedCache, buildPolyState, type PlaneEq, type PolyDerivedCache, type PolyState } from "../../engine/poly";
+import {
+  buildPolyFullModel,
+  buildPolyState,
+  buildPolyTopology,
+  type PlaneEq,
+  type PolyDerivedCache,
+  type PolyRichState,
+  type PolyState,
+  type PolyTopologyData,
+} from "../../engine/poly";
 import type { ProjectionControllerAPI } from "./types";
 
 export function useProjectionController(
@@ -16,14 +25,18 @@ export function useProjectionController(
   const baselineRef = useRef<Vec3[]>(initialVertices.map((p: Vec3) => [...p] as Vec3));
   const paramsRef = useRef<ProjectorParams>(params);
   const lastPlanesRef = useRef<PlaneEq[]>([]);
+  const topologyRef = useRef<PolyTopologyData>(buildPolyTopology(faces, initialVertices.length));
   const polyStateRef = useRef<PolyState>(buildPolyState(initialVertices, faces));
-  const derivedRef = useRef<PolyDerivedCache>(buildPolyDerivedCache(polyStateRef.current));
+  const polyRichRef = useRef<PolyRichState>(buildPolyFullModel(polyStateRef.current, topologyRef.current).rich);
+  const derivedRef = useRef<PolyDerivedCache>(buildPolyFullModel(polyStateRef.current, topologyRef.current).derived);
 
   const recomputePolyCache = useCallback((X: ReadonlyArray<Vec3>) => {
     const state = buildPolyState(X, faces, lastPlanesRef.current);
     lastPlanesRef.current = state.facePlanes.map((pl) => ({ n: [pl.n[0], pl.n[1], pl.n[2]], b: pl.b }));
-    polyStateRef.current = state;
-    derivedRef.current = buildPolyDerivedCache(state);
+    const full = buildPolyFullModel(state, topologyRef.current);
+    polyStateRef.current = full.rich;
+    polyRichRef.current = full.rich;
+    derivedRef.current = full.derived;
   }, [faces]);
 
   // Hot-path reads params from a ref.
@@ -40,6 +53,7 @@ export function useProjectionController(
   // Recreate projector atomically from the latest topology/method/vertices.
   useEffect(() => {
     baselineRef.current = initialVertices.map((p: Vec3) => [...p] as Vec3);
+    topologyRef.current = buildPolyTopology(faces, baselineRef.current.length);
     handlesRef.current.clear();
     projectorRef.current = createProjector(method, faces, baselineRef.current, paramsRef.current);
     lastPlanesRef.current = [];
@@ -103,6 +117,12 @@ export function useProjectionController(
     return polyStateRef.current;
   }, [recomputePolyCache]);
 
+  const getPolyRichState = useCallback((): PolyRichState => {
+    const X = projectorRef.current?.getPositionsRef() ?? baselineRef.current;
+    recomputePolyCache(X);
+    return polyRichRef.current;
+  }, [recomputePolyCache]);
+
   const getDerivedCache = useCallback((): PolyDerivedCache => {
     const X = projectorRef.current?.getPositionsRef() ?? baselineRef.current;
     recomputePolyCache(X);
@@ -130,6 +150,7 @@ export function useProjectionController(
       stepUntilTol,
       getXRef,
       getPolyState,
+      getPolyRichState,
       getDerivedCache,
       snapshot,
       commitBaseline,
@@ -144,6 +165,7 @@ export function useProjectionController(
       stepUntilTol,
       getXRef,
       getPolyState,
+      getPolyRichState,
       getDerivedCache,
       snapshot,
       commitBaseline,

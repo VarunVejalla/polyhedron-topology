@@ -1,5 +1,7 @@
 import type { Vec3 } from "../math/types";
-import type { PlaneEq, PolyDerivedCache, PolyState, RollStep } from "./types";
+import { buildPolyRichState } from "./auxiliary";
+import { computePolyLightConstraintMetrics } from "./light";
+import type { PolyDerivedCache, PolyRichState, PolyState, RollStep } from "./types";
 
 function dot3(a: ReadonlyArray<number>, b: ReadonlyArray<number>): number {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -7,14 +9,6 @@ function dot3(a: ReadonlyArray<number>, b: ReadonlyArray<number>): number {
 
 function sub3(a: ReadonlyArray<number>, b: ReadonlyArray<number>): Vec3 {
   return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-}
-
-function add3(a: ReadonlyArray<number>, b: ReadonlyArray<number>): Vec3 {
-  return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
-}
-
-function mul3(a: ReadonlyArray<number>, s: number): Vec3 {
-  return [a[0] * s, a[1] * s, a[2] * s];
 }
 
 function cross3(a: ReadonlyArray<number>, b: ReadonlyArray<number>): Vec3 {
@@ -47,68 +41,6 @@ function faceCentroid(vertices: ReadonlyArray<Vec3>, face: ReadonlyArray<number>
   c[1] *= inv;
   c[2] *= inv;
   return c;
-}
-
-function projectPointToPlane(p: ReadonlyArray<number>, plane: PlaneEq): Vec3 {
-  const d = dot3(plane.n, p) - plane.b;
-  return [p[0] - plane.n[0] * d, p[1] - plane.n[1] * d, p[2] - plane.n[2] * d];
-}
-
-function computeVolumeAndCom(state: PolyState): { volume: number; centerOfMass: Vec3 } {
-  const { vertices, faces, facePlanes } = state;
-  const ref: Vec3 = [0, 0, 0];
-  for (let i = 0; i < vertices.length; i++) {
-    ref[0] += vertices[i][0];
-    ref[1] += vertices[i][1];
-    ref[2] += vertices[i][2];
-  }
-  if (vertices.length > 0) {
-    const inv = 1 / vertices.length;
-    ref[0] *= inv;
-    ref[1] *= inv;
-    ref[2] *= inv;
-  }
-
-  let totalVol = 0;
-  let comNum: Vec3 = [0, 0, 0];
-  for (let fi = 0; fi < faces.length; fi++) {
-    const face = faces[fi];
-    if (face.length < 3) continue;
-    const n = facePlanes[fi].n;
-    const a0 = vertices[face[0]];
-    for (let i = 1; i + 1 < face.length; i++) {
-      let b = vertices[face[i]];
-      let c = vertices[face[i + 1]];
-      let triN = cross3(sub3(b, a0), sub3(c, a0));
-      if (dot3(triN, n) < 0) {
-        const tmp = b;
-        b = c;
-        c = tmp;
-        triN = cross3(sub3(b, a0), sub3(c, a0));
-      }
-
-      const pa = sub3(a0, ref);
-      const pb = sub3(b, ref);
-      const pc = sub3(c, ref);
-      let vol = dot3(pa, cross3(pb, pc)) / 6;
-      if (vol < 0) vol = -vol;
-      if (vol <= 1e-15) continue;
-
-      const tetraC = mul3(add3(add3(add3(ref, a0), b), c), 0.25);
-      comNum[0] += tetraC[0] * vol;
-      comNum[1] += tetraC[1] * vol;
-      comNum[2] += tetraC[2] * vol;
-      totalVol += vol;
-    }
-  }
-
-  if (totalVol <= 1e-15) {
-    return { volume: 0, centerOfMass: [ref[0], ref[1], ref[2]] };
-  }
-  return {
-    volume: totalVol,
-    centerOfMass: [comNum[0] / totalVol, comNum[1] / totalVol, comNum[2] / totalVol],
-  };
 }
 
 function polygonSignedMargin(
@@ -229,7 +161,6 @@ function fiveColor(
   };
 
   if (!dfs()) {
-    // Fallback: greedy with unbounded color count.
     color.clear();
     for (const n of nodes) {
       const used = new Set<number>();
@@ -246,44 +177,18 @@ function fiveColor(
   return color;
 }
 
-export function buildPolyDerivedCache(state: PolyState): PolyDerivedCache {
-  const { vertices, faces, facePlanes } = state;
-  const incidence = faces.map((face) => new Set<number>(face));
+function isRichState(state: PolyState | PolyRichState): state is PolyRichState {
+  return "topology" in state && "aux" in state;
+}
 
-  let planarityMetric = 0;
-  for (let fi = 0; fi < faces.length; fi++) {
-    const plane = facePlanes[fi];
-    for (let li = 0; li < faces[fi].length; li++) {
-      const vi = faces[fi][li];
-      const p = vertices[vi];
-      const d = dot3(plane.n, p) - plane.b;
-      planarityMetric += d * d;
-    }
-  }
+export function buildPolyDerivedCache(stateArg: PolyState | PolyRichState): PolyDerivedCache {
+  const rich = isRichState(stateArg) ? stateArg : buildPolyRichState(stateArg);
+  const { vertices, faces, facePlanes, aux } = rich;
 
-  let unitNormalityMetric = 0;
-  for (let fi = 0; fi < facePlanes.length; fi++) {
-    const n = facePlanes[fi].n;
-    const d = dot3(n, n) - 1;
-    unitNormalityMetric += d * d;
-  }
-
-  let convexityViolation = 0;
-  let isConvex = true;
-  for (let fi = 0; fi < faces.length; fi++) {
-    const plane = facePlanes[fi];
-    for (let vi = 0; vi < vertices.length; vi++) {
-      if (incidence[fi].has(vi)) continue;
-      const val = dot3(plane.n, vertices[vi]) - plane.b;
-      if (val > 0) {
-        isConvex = false;
-        convexityViolation += val * val;
-      }
-    }
-  }
-
-  const { volume, centerOfMass } = computeVolumeAndCom(state);
-  const projectedComByFace: Vec3[] = facePlanes.map((pl) => projectPointToPlane(centerOfMass, pl));
+  const light = computePolyLightConstraintMetrics(rich);
+  const centerOfMass: Vec3 = [aux.centerOfMass[0], aux.centerOfMass[1], aux.centerOfMass[2]];
+  const volume = aux.volume;
+  const projectedComByFace: Vec3[] = aux.projectedComByFace.map((p) => [p[0], p[1], p[2]] as Vec3);
 
   const { byEdge, neighbors } = buildFaceAdjacency(faces);
 
@@ -369,10 +274,10 @@ export function buildPolyDerivedCache(state: PolyState): PolyDerivedCache {
   const basinColorByFace = basinIdByFace.map((bid) => basinColor.get(bid) ?? 0);
 
   return {
-    planarityMetric,
-    unitNormalityMetric,
-    convexityViolation,
-    isConvex,
+    planarityMetric: light.planarityMetric,
+    unitNormalityMetric: light.unitNormalityMetric,
+    convexityViolation: light.convexityViolation,
+    isConvex: light.isConvex,
     centerOfMass,
     volume,
     projectedComByFace,

@@ -3,7 +3,7 @@ import type * as THREE from "three";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { Vec3 } from "../../engine/math/types";
 import type { IProjector, ProjectorParams } from "../../engine/projection";
-import type { PolyDerivedCache, PolyState } from "../../engine/poly";
+import type { PolyDerivedCache, PolyRichState, PolyState } from "../../engine/poly";
 
 export type ProjectionControllerAPI = {
   projectorRef: React.MutableRefObject<IProjector | null>;
@@ -21,6 +21,7 @@ export type ProjectionControllerAPI = {
 
   getXRef: () => ReadonlyArray<Vec3>;
   getPolyState: () => PolyState;
+  getPolyRichState: () => PolyRichState;
   getDerivedCache: () => PolyDerivedCache;
   snapshot: () => Vec3[];
   commitBaseline: (snap: Vec3[]) => void;

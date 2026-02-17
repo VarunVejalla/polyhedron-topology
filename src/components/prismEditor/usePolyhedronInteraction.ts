@@ -234,7 +234,7 @@ export function usePolyhedronInteraction(
       runController.clearAllHandles();
 
       const opts = stateRef.current.optimizeOptions;
-      const session = createFeasibilityOptimizerSession(runController.getPolyState(), {
+      const session = createFeasibilityOptimizerSession(runController.getPolyRichState(), {
         rho: Math.max(1e-6, opts.rho),
         maxOuterIters: Math.max(1, Math.floor(opts.maxOuterIters)),
         tolEq: Math.max(0, opts.tolEq),
