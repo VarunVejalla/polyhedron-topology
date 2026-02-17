@@ -7,7 +7,7 @@ import { makeDefaultPrism, PRISM_FACES, type Vec3 } from "../engine/prismTopolog
 import { checkPolyhedral } from "../graph/validity";
 import type { ProjectionMethod } from "../engine/projection";
 
-export const GRAPH_VIEW = { w: 420, h: 360, padding: 28 };
+const GRAPH_VIEW = { w: 420, h: 360, padding: 28 };
 
 type PolyDocument = {
   vertices: Vec3[];
