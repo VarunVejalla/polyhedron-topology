@@ -10,7 +10,7 @@ function negate3(v: ReadonlyArray<number>): Vec3 {
   return [-v[0], -v[1], -v[2]];
 }
 
-export function computeFacePlanes(
+function computeFacePlanes(
   vertices: ReadonlyArray<Vec3>,
   faces: ReadonlyArray<ReadonlyArray<number>>,
   prevPlanes?: ReadonlyArray<PlaneEq>

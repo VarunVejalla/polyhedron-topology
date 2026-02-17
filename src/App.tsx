@@ -5,13 +5,9 @@ import { PrismEditor, type PrismEditorHandle } from "./components/PrismEditor";
 import { GraphEditor } from "./components/GraphEditor";
 
 import { projectionMethods, type ProjectionMethod } from "./engine/projection";
-import { buildCanonicalPolyhedron } from "./engine/canonical/canonicalPolyhedron";
 
 import { presetNames } from "./graph/presets";
-import type { NodeId } from "./graph/types";
-import { checkPolyhedral } from "./graph/validity";
-import { chooseOuterFace, facesFromEmbedding, planarDualFromFaces, type Face } from "./graph/embedding";
-import { tutteLayout } from "./graph/layout";
+import { derivePolyFromFaceGraph, derivePolyFromVertexGraph } from "./graph/pipeline";
 
 import { createInitialState, documentReducer, GRAPH_VIEW } from "./state/document";
 
@@ -108,155 +104,36 @@ export default function App() {
 
   const applyPreset = (preset: string) => dispatch({ type: "APPLY_PRESET", preset });
 
-  const centroidOfCycle = (g: { nodes: Array<{ id: NodeId; x: number; y: number }> }, cycle: NodeId[]): { x: number; y: number } => {
-    const byId = new Map<NodeId, { x: number; y: number }>(g.nodes.map((n) => [n.id, { x: n.x, y: n.y }]));
-    let sx = 0;
-    let sy = 0;
-    let cnt = 0;
-    for (const v of cycle) {
-      const p = byId.get(v);
-      if (!p) continue;
-      sx += p.x;
-      sy += p.y;
-      cnt++;
-    }
-    if (cnt === 0) return { x: 0, y: 0 };
-    return { x: sx / cnt, y: sy / cnt };
-  };
-
   const buildPolyFromVertexGraph = () => {
-    const rep = checkPolyhedral(doc.vertexGraph);
-    if (!rep.ok) {
-      alert("Vertex graph is not a valid polyhedral graph (planar + 3-connected, >= 4 nodes).");
-      return;
-    }
-
-    let faces0: Face[];
     try {
-      faces0 = facesFromEmbedding(doc.vertexGraph.nodes.map((n) => n.id), doc.vertexGraph.edges, rep.embedding);
+      const built = derivePolyFromVertexGraph(doc.vertexGraph, GRAPH_VIEW);
+      dispatch({
+        type: "COMMIT_BUILD",
+        patch: {
+          vertexGraph: built.vertexGraph,
+          faceGraph: built.faceGraph,
+          poly: built.poly,
+        },
+      });
     } catch (e: unknown) {
-      alert(`Face extraction from the planarity embedding failed: ${String(e)}`);
-      return;
+      alert(String(e));
     }
-
-    const outerFace = chooseOuterFace(faces0);
-    if (!outerFace) {
-      alert("Could not determine an outer face for Tutte layout.");
-      return;
-    }
-
-    const pos = tutteLayout(doc.vertexGraph, outerFace.cycle, GRAPH_VIEW);
-    const nodes2 = doc.vertexGraph.nodes.map((n) => {
-      const p = pos.get(n.id);
-      return p ? { ...n, x: p.x, y: p.y } : n;
-    });
-
-    const embGraph = { nodes: nodes2, edges: doc.vertexGraph.edges.map((e) => ({ ...e })) };
-
-    const dual = planarDualFromFaces(faces0);
-    const centroids = new Map<string, { x: number; y: number }>();
-    for (const f of faces0) centroids.set(f.id, centroidOfCycle(embGraph, f.cycle));
-    for (const nd of dual.nodes) {
-      const c = centroids.get(nd.id);
-      if (c) {
-        nd.x = c.x;
-        nd.y = c.y;
-      }
-    }
-
-    const realization = buildCanonicalPolyhedron({
-      vertexGraph: embGraph,
-      faces: faces0.map((f) => ({ id: f.id, cycle: f.cycle })),
-    });
-
-    dispatch({
-      type: "COMMIT_BUILD",
-      patch: {
-        faceGraph: dual,
-        poly: { vertices: realization.vertices, faces: realization.faces },
-      },
-    });
   };
 
   const buildPolyFromFaceGraph = () => {
-    const rep = checkPolyhedral(doc.faceGraph);
-    if (!rep.ok) {
-      alert("Face graph is not a valid polyhedral graph (planar + 3-connected, >= 4 nodes).");
-      return;
-    }
-
-    let primalFaces: Face[];
     try {
-      primalFaces = facesFromEmbedding(doc.faceGraph.nodes.map((n) => n.id), doc.faceGraph.edges, rep.embedding);
+      const built = derivePolyFromFaceGraph(doc.faceGraph, GRAPH_VIEW);
+      dispatch({
+        type: "COMMIT_BUILD",
+        patch: {
+          vertexGraph: built.vertexGraph,
+          faceGraph: built.faceGraph,
+          poly: built.poly,
+        },
+      });
     } catch (e: unknown) {
-      alert(`Face extraction from the planarity embedding failed: ${String(e)}`);
-      return;
+      alert(String(e));
     }
-
-    const dual = planarDualFromFaces(primalFaces);
-    const repDual = checkPolyhedral(dual);
-    if (!repDual.ok) {
-      alert("Internal error: computed dual graph did not validate as polyhedral.");
-      return;
-    }
-
-    let dualFaces0: Face[];
-    try {
-      dualFaces0 = facesFromEmbedding(dual.nodes.map((n) => n.id), dual.edges, repDual.embedding);
-    } catch (e: unknown) {
-      alert(`Dual face extraction from the planarity embedding failed: ${String(e)}`);
-      return;
-    }
-
-    const outerDualFace = chooseOuterFace(dualFaces0);
-    if (!outerDualFace) {
-      alert("Could not determine an outer face for Tutte layout of the dual graph.");
-      return;
-    }
-
-    const posDual = tutteLayout(dual, outerDualFace.cycle, GRAPH_VIEW);
-    const nodesDual2 = dual.nodes.map((n) => {
-      const p = posDual.get(n.id);
-      return p ? { ...n, x: p.x, y: p.y } : n;
-    });
-    const embDualGraph = { nodes: nodesDual2, edges: dual.edges.map((e) => ({ ...e })) };
-
-    const dirEdgeToFace = new Map<string, string>();
-    for (const f of primalFaces) {
-      const cyc = f.cycle;
-      for (let i = 0; i < cyc.length; i++) {
-        const a = cyc[i];
-        const b = cyc[(i + 1) % cyc.length];
-        dirEdgeToFace.set(`${a}__${b}`, f.id);
-      }
-    }
-
-    const facesForDual: Array<{ id: string; cycle: NodeId[] }> = [];
-    for (const nd of doc.faceGraph.nodes) {
-      const u = nd.id;
-      const rot = rep.embedding[u] ?? [];
-      const cyc: NodeId[] = [];
-      for (const v of rot) {
-        const fid = dirEdgeToFace.get(`${u}__${v}`);
-        if (fid) cyc.push(fid);
-      }
-      if (cyc.length >= 3) facesForDual.push({ id: u, cycle: cyc });
-    }
-
-    if (facesForDual.length === 0) {
-      alert("Could not derive dual face cycles from the face graph embedding.");
-      return;
-    }
-
-    const realization = buildCanonicalPolyhedron({ vertexGraph: embDualGraph, faces: facesForDual });
-
-    dispatch({
-      type: "COMMIT_BUILD",
-      patch: {
-        vertexGraph: embDualGraph,
-        poly: { vertices: realization.vertices, faces: realization.faces },
-      },
-    });
   };
 
   const toggleViewFlag = (

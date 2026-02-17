@@ -6,9 +6,11 @@ import {
   lightFullDim,
   lightNBase,
   lightVertexDim,
-  readLightNormal,
-  readLightOffset,
+  incidenceConstraintLinearization,
+  incidenceConstraintValue,
+  nonIncidenceConstraintValue,
   readLightVertex,
+  unitNormalConstraintValue,
   type PolyState,
   type PolyTopologyData,
   unpackPolyLightState,
@@ -34,7 +36,7 @@ type ActivePieceProvider = {
   getActiveEdge: (fi: number) => number | undefined;
 };
 
-export type FeasibilityOptimizeParams = {
+type FeasibilityOptimizeParams = {
   rho: number;
   tau: number;
   maxOuterIters: number;
@@ -60,7 +62,7 @@ export type FeasibilityOptimizeParams = {
   stableFaceIndex: number;
 };
 
-export type FeasibilityOptimizeDiagnostics = {
+type FeasibilityOptimizeDiagnostics = {
   iter: number;
   eqResidualL2: number;
   ineqViolationMax: number;
@@ -264,25 +266,21 @@ class FeasibilityMetaModelBuilder implements MetaModelBuilder {
       const vb = 3 * pair.vi;
       const nb = lightNBase(this.vertexCount(), pair.fi);
       const bb = lightBIndex(this.vertexCount(), pair.fi);
-      const c =
-        y[nb] * y[vb] +
-        y[nb + 1] * y[vb + 1] +
-        y[nb + 2] * y[vb + 2] -
-        y[bb];
-      const row: SparseRow = { idx: [], val: [], c };
-      pushSparseTriplet(row, vb, y[nb]);
-      pushSparseTriplet(row, vb + 1, y[nb + 1]);
-      pushSparseTriplet(row, vb + 2, y[nb + 2]);
-      pushSparseTriplet(row, nb, y[vb]);
-      pushSparseTriplet(row, nb + 1, y[vb + 1]);
-      pushSparseTriplet(row, nb + 2, y[vb + 2]);
-      pushSparseTriplet(row, bb, -1);
+      const lin = incidenceConstraintLinearization(y, this.vertexCount(), pair);
+      const row: SparseRow = { idx: [], val: [], c: lin.value };
+      pushSparseTriplet(row, vb, lin.gV[0]);
+      pushSparseTriplet(row, vb + 1, lin.gV[1]);
+      pushSparseTriplet(row, vb + 2, lin.gV[2]);
+      pushSparseTriplet(row, nb, lin.gN[0]);
+      pushSparseTriplet(row, nb + 1, lin.gN[1]);
+      pushSparseTriplet(row, nb + 2, lin.gN[2]);
+      pushSparseTriplet(row, bb, lin.gB);
       rows.push(row);
     }
 
     for (let fi = 0; fi < this.faces.length; fi++) {
       const nb = lightNBase(this.vertexCount(), fi);
-      const c = y[nb] * y[nb] + y[nb + 1] * y[nb + 1] + y[nb + 2] * y[nb + 2] - 1;
+      const c = unitNormalConstraintValue(y, this.vertexCount(), fi);
       const row: SparseRow = { idx: [], val: [], c };
       pushSparseTriplet(row, nb, 2 * y[nb]);
       pushSparseTriplet(row, nb + 1, 2 * y[nb + 1]);
@@ -318,20 +316,16 @@ class FeasibilityMetaModelBuilder implements MetaModelBuilder {
       const vb = 3 * pair.vi;
       const nb = lightNBase(this.vertexCount(), pair.fi);
       const bb = lightBIndex(this.vertexCount(), pair.fi);
-      const g =
-        y[nb] * y[vb] +
-        y[nb + 1] * y[vb + 1] +
-        y[nb + 2] * y[vb + 2] -
-        y[bb] +
-        params.convexityMargin;
+      const g = nonIncidenceConstraintValue(y, this.vertexCount(), pair, params.convexityMargin);
       const row: SparseRow = { idx: [], val: [], c: Math.max(0, g) };
       if (g > 0) {
-        pushSparseTriplet(row, vb, y[nb]);
-        pushSparseTriplet(row, vb + 1, y[nb + 1]);
-        pushSparseTriplet(row, vb + 2, y[nb + 2]);
-        pushSparseTriplet(row, nb, y[vb]);
-        pushSparseTriplet(row, nb + 1, y[vb + 1]);
-        pushSparseTriplet(row, nb + 2, y[vb + 2]);
+        const lin = incidenceConstraintLinearization(y, this.vertexCount(), pair);
+        pushSparseTriplet(row, vb, lin.gV[0]);
+        pushSparseTriplet(row, vb + 1, lin.gV[1]);
+        pushSparseTriplet(row, vb + 2, lin.gV[2]);
+        pushSparseTriplet(row, nb, lin.gN[0]);
+        pushSparseTriplet(row, nb + 1, lin.gN[1]);
+        pushSparseTriplet(row, nb + 2, lin.gN[2]);
         pushSparseTriplet(row, bb, -1);
       }
       rows.push(row);
@@ -437,7 +431,7 @@ class FeasibilityMetaModelBuilder implements MetaModelBuilder {
   }
 }
 
-export class FeasibilityOptimizerSession {
+class FeasibilityOptimizerSession {
   private faces: number[][];
   private topology: PolyTopologyData;
   private params: FeasibilityOptimizeParams;
@@ -580,15 +574,10 @@ export class FeasibilityOptimizerSession {
   private computeEqResiduals(y: ReadonlyArray<number>): number[] {
     const out: number[] = [];
     for (let i = 0; i < this.topology.incidencePairs.length; i++) {
-      const pair = this.topology.incidencePairs[i];
-      const v = readLightVertex(y, pair.vi);
-      const n = readLightNormal(y, this.vertexCount(), pair.fi);
-      const b = readLightOffset(y, this.vertexCount(), pair.fi);
-      out.push(dot3(n, v) - b);
+      out.push(incidenceConstraintValue(y, this.vertexCount(), this.topology.incidencePairs[i]));
     }
     for (let fi = 0; fi < this.faces.length; fi++) {
-      const n = readLightNormal(y, this.vertexCount(), fi);
-      out.push(dot3(n, n) - 1);
+      out.push(unitNormalConstraintValue(y, this.vertexCount(), fi));
     }
     out.push(this.buildAux(y).volume - this.params.volumeTarget);
     return out;
@@ -606,10 +595,7 @@ export class FeasibilityOptimizerSession {
 
     for (let i = 0; i < this.topology.nonIncidencePairs.length; i++) {
       const pair = this.topology.nonIncidencePairs[i];
-      const v = readLightVertex(y, pair.vi);
-      const n = readLightNormal(y, this.vertexCount(), pair.fi);
-      const b = readLightOffset(y, this.vertexCount(), pair.fi);
-      const g = dot3(n, v) - b + this.params.convexityMargin;
+      const g = nonIncidenceConstraintValue(y, this.vertexCount(), pair, this.params.convexityMargin);
       if (g > 0) {
         activeConvexityCount++;
         if (g > maxViolation) maxViolation = g;

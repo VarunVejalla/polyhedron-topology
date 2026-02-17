@@ -3,7 +3,7 @@ import type { PolyAuxState, PolyState, PolyTopologyData } from "./types";
 import { buildPolyAuxState } from "./auxiliary";
 import { buildPolyTopology } from "./topology";
 
-export type ResidualBlock = {
+type ResidualBlock = {
   name: string;
   values: number[];
   count: number;
@@ -218,4 +218,3 @@ export function computeAuxConstraintResiduals(
     maxAbs,
   };
 }
-

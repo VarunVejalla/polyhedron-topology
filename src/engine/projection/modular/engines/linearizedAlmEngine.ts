@@ -1,7 +1,7 @@
 import type { MetaModel, MetaState, PrimalEngine, StepProposal } from "../types";
 import { dotN, solveCG } from "../../shared/numeric";
 
-export type LinearizedAlmEngineParams = {
+type LinearizedAlmEngineParams = {
   cgIters: number;
   cgTol: number;
 };

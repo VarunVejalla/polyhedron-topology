@@ -14,9 +14,9 @@ type PrismState = {
 export const PRISM_FACES: number[][] = [
   [0, 1, 2],      // top
   [3, 5, 4],      // bottom (reversed for an outward-ish default)
-  [0, 1, 4, 3],   // side
-  [1, 2, 5, 4],   // side
-  [2, 0, 3, 5],   // side
+  [0, 3, 4, 1],   // side
+  [1, 4, 5, 2],   // side
+  [2, 5, 3, 0],   // side
 ];
 
 export function makeDefaultPrism(): PrismState {

@@ -5,7 +5,7 @@ export type ConstraintLinearization = {
   applyJT: (w: ReadonlyArray<number>) => number[];
 };
 
-export type HardConstraintModel = {
+type HardConstraintModel = {
   linearization: ConstraintLinearization;
   evaluate: (y: ReadonlyArray<number>) => number[];
 };

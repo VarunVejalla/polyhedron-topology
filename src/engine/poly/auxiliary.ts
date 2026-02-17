@@ -55,7 +55,7 @@ function tetraCentroid(a: ReadonlyArray<number>, b: ReadonlyArray<number>, c: Re
   return mul3(add3(add3(a, b), add3(c, d)), 0.25);
 }
 
-export function computeVolumeAndCenterOfMass(
+function computeVolumeAndCenterOfMass(
   state: PolyState,
   options?: { normalizeFacePlanes?: boolean }
 ): { volume: number; centerOfMass: Vec3 } {
@@ -64,7 +64,7 @@ export function computeVolumeAndCenterOfMass(
 
   const ref = averagePoint(state.vertices);
   let volume = 0;
-  let num: Vec3 = [0, 0, 0];
+  const num: Vec3 = [0, 0, 0];
 
   for (let fi = 0; fi < state.faces.length; fi++) {
     const face = state.faces[fi];

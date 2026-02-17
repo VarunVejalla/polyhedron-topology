@@ -1,11 +1,9 @@
 import type { SimpleGraph } from "../graph/types";
 import { cloneGraph } from "../graph/core";
-import { buildVertexPresetGraph, circleLayout, presetNames } from "../graph/presets";
-import { facesFromEmbedding, chooseOuterFace, planarDualFromFaces, type Face } from "../graph/embedding";
-import { tutteLayout } from "../graph/layout";
+import { buildVertexPresetGraph, presetNames } from "../graph/presets";
 import { makeDefaultPrism, PRISM_FACES, type Vec3 } from "../engine/prismTopology";
-import { checkPolyhedral } from "../graph/validity";
 import type { ProjectionMethod } from "../engine/projection";
+import { deriveDualPairFromVertexGraph } from "../graph/pipeline";
 
 export const GRAPH_VIEW = { w: 420, h: 360, padding: 28 };
 
@@ -106,43 +104,6 @@ function cloneDoc(d: Document): Document {
   };
 }
 
-function computeDualPairFromVertexGraph(g0: SimpleGraph): { vertexGraph: SimpleGraph; faceGraph: SimpleGraph } | null {
-  const rep = checkPolyhedral(g0);
-  if (!rep.ok) return null;
-
-  let faces0: Face[];
-  try {
-    faces0 = facesFromEmbedding(g0.nodes.map((n) => n.id), g0.edges, rep.embedding);
-  } catch {
-    return null;
-  }
-
-  const outerFace = chooseOuterFace(faces0);
-  if (!outerFace) return null;
-
-  const posTutte = tutteLayout(g0, outerFace.cycle, GRAPH_VIEW);
-  const vertexGraph: SimpleGraph = {
-    nodes: g0.nodes.map((n) => {
-      const p = posTutte.get(n.id);
-      return p ? { ...n, x: p.x, y: p.y } : n;
-    }),
-    edges: g0.edges.map((e) => ({ ...e })),
-  };
-
-  let faceGraph = planarDualFromFaces(faces0);
-
-  // Give the dual a pleasant initial layout (circle), preserving later manual edits.
-  const r = Math.max(40, Math.min(GRAPH_VIEW.w, GRAPH_VIEW.h) / 2 - GRAPH_VIEW.padding);
-  const posCircle = circleLayout(faceGraph.nodes.map((n) => n.id), GRAPH_VIEW.w, GRAPH_VIEW.h, r);
-  faceGraph = {
-    nodes: faceGraph.nodes.map((n) => ({ ...n, x: posCircle[n.id].x, y: posCircle[n.id].y })),
-    edges: faceGraph.edges.map((e) => ({ ...e })),
-  };
-
-  return { vertexGraph, faceGraph };
-}
-
-
 export function createInitialState(): DocumentState {
   const initialPoly = makeDefaultPrism();
 
@@ -150,7 +111,7 @@ export function createInitialState(): DocumentState {
   const preset = presets[0] ?? "Triangular prism";
   const initialVertexGraph = buildVertexPresetGraph(preset, GRAPH_VIEW);
 
-  const pair = computeDualPairFromVertexGraph(initialVertexGraph);
+  const pair = deriveDualPairFromVertexGraph(initialVertexGraph, GRAPH_VIEW);
 
   const present: Document = {
     preset,
@@ -231,7 +192,7 @@ export function documentReducer(state: DocumentState, action: DocumentAction): D
 
     case "APPLY_PRESET": {
       const initialVertexGraph = buildVertexPresetGraph(action.preset, GRAPH_VIEW);
-      const pair = computeDualPairFromVertexGraph(initialVertexGraph);
+      const pair = deriveDualPairFromVertexGraph(initialVertexGraph, GRAPH_VIEW);
       const next: Document = {
         ...cloneDoc(state.present),
         preset: action.preset,

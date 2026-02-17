@@ -1,5 +1,4 @@
 import type { Vec3 } from "../math/types";
-import { buildPolyState } from "./state";
 import { buildPolyTopology } from "./topology";
 import type { PlaneEq, PolyState, PolyTopologyData } from "./types";
 
@@ -7,12 +6,12 @@ function dot3(a: ReadonlyArray<number>, b: ReadonlyArray<number>): number {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
-export type PolyLightModel = {
+type PolyLightModel = {
   state: PolyState;
   topology: PolyTopologyData;
 };
 
-export type PolyLightConstraintMetrics = {
+type PolyLightConstraintMetrics = {
   planarityMetric: number;
   unitNormalityMetric: number;
   convexityViolation: number;
@@ -91,16 +90,6 @@ export function unpackPolyLightState(
     faces: faces.map((f) => [...f]),
     facePlanes,
   };
-}
-
-export function buildPolyLightModel(
-  vertices: ReadonlyArray<Vec3>,
-  faces: ReadonlyArray<ReadonlyArray<number>>,
-  prevPlanes?: ReadonlyArray<PlaneEq>
-): PolyLightModel {
-  const state = buildPolyState(vertices, faces, prevPlanes);
-  const topology = buildPolyTopology(state.faces, state.vertices.length);
-  return { state, topology };
 }
 
 export function buildPolyLightModelFromState(state: PolyState): PolyLightModel {

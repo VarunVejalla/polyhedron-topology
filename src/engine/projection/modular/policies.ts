@@ -10,7 +10,7 @@ import type {
 } from "./types";
 import { normN } from "../shared/numeric";
 
-export type ArmijoParams = {
+type ArmijoParams = {
   c1: number;
   shrink: number;
   maxSteps: number;
@@ -51,7 +51,7 @@ export const scaledDualUpdater: DualUpdater = {
   },
 };
 
-export type ResidualBalancePenaltyParams = {
+type ResidualBalancePenaltyParams = {
   enabled: boolean;
   increase: number;
   decrease: number;
@@ -90,15 +90,4 @@ export const neverStopPolicy: StopPolicy = {
   },
 };
 
-export type ResidualStopParams = {
-  constraintTol: number;
-};
-
-export function createResidualStopPolicy(params: ResidualStopParams): StopPolicy {
-  return {
-    shouldStop(_state: Readonly<MetaState>, _model: Readonly<MetaModel>, cNew: ReadonlyArray<number>) {
-      return normN(cNew) <= params.constraintTol;
-    },
-  };
-}
 

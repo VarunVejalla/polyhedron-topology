@@ -1,29 +1,27 @@
 import type { Vec3 } from "../../math/types";
 import { bestFitPlanePCA } from "../../geom/plane";
 import {
+  buildPolyTopology,
   lightBIndex,
   lightFullDim,
   lightNBase,
   lightVertexDim,
+  nonIncidenceConstraintValue,
   packPolyLightState,
-  readLightNormal,
-  readLightOffset,
-  readLightVertex,
+  incidenceConstraintLinearization,
+  incidenceConstraintValue,
+  squaredSlackNonIncidenceConstraintLinearization,
+  unitNormalConstraintLinearization,
+  unitNormalConstraintValue,
   type PolyState,
+  type VertexFaceIncidence,
 } from "../../poly";
 import type { HandleSet } from "../index";
 import { sumSquaredPlanarityResidual } from "../shared/metrics";
 import { evaluateVertexTrackingObjectiveAndGradient } from "../shared/regularity";
 import type { ConstraintLinearization, MetaModel, MetaModelBuilder, MetaState } from "./types";
 
-type Incidence = {
-  fi: number;
-  vi: number;
-};
-
-type NonIncidence = {
-  fi: number;
-  vi: number;
+type NonIncidence = VertexFaceIncidence & {
   di: number;
 };
 
@@ -83,35 +81,6 @@ export type ModularGuidedALMParams = {
   constraintMode?: ModularConstraintMode;
 };
 
-function dot3(a: Vec3, b: Vec3): number {
-  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-}
-
-function buildIncidences(
-  faces: ReadonlyArray<ReadonlyArray<number>>
-): Incidence[] {
-  const out: Incidence[] = [];
-  for (let fi = 0; fi < faces.length; fi++) {
-    for (const vi of faces[fi]) out.push({ fi, vi });
-  }
-  return out;
-}
-
-function buildNonIncidences(
-  faces: ReadonlyArray<ReadonlyArray<number>>,
-  vertexCount: number
-): NonIncidence[] {
-  const out: NonIncidence[] = [];
-  for (let fi = 0; fi < faces.length; fi++) {
-    const s = new Set<number>(faces[fi]);
-    for (let vi = 0; vi < vertexCount; vi++) {
-      if (s.has(vi)) continue;
-      out.push({ fi, vi, di: out.length });
-    }
-  }
-  return out;
-}
-
 function initializeSquaredSlackValues(
   baseY: ReadonlyArray<number>,
   vertexCount: number,
@@ -120,11 +89,7 @@ function initializeSquaredSlackValues(
   const d = new Array<number>(nonIncidences.length).fill(0);
   for (let i = 0; i < nonIncidences.length; i++) {
     const pair = nonIncidences[i];
-    const n = readLightNormal(baseY, vertexCount, pair.fi);
-    const b = readLightOffset(baseY, vertexCount, pair.fi);
-    const v = readLightVertex(baseY, pair.vi);
-    // Outward normals => convex side is n·v - b <= 0.
-    const gap = -(dot3(n, v) - b);
+    const gap = -nonIncidenceConstraintValue(baseY, vertexCount, pair);
     d[i] = Math.sqrt(Math.max(0, gap));
   }
   return d;
@@ -167,9 +132,10 @@ export function countPlanarGuidedHardConstraints(
   vertexCount: number,
   mode: ModularConstraintMode
 ): number {
-  const mInc = buildIncidences(faces).length;
+  const topology = buildPolyTopology(faces, vertexCount);
+  const mInc = topology.incidencePairs.length;
   if (mode === "inc_noninc_unit_squared_slack") {
-    return mInc + buildNonIncidences(faces, vertexCount).length + faces.length;
+    return mInc + topology.nonIncidencePairs.length + faces.length;
   }
   return mInc + faces.length;
 }
@@ -190,7 +156,7 @@ export function packPlanarGuidedY(
   const base = packPolyLightState(baseState);
   if (mode !== "inc_noninc_unit_squared_slack") return base;
 
-  const nonInc = buildNonIncidences(faces, vertices.length);
+  const nonInc = buildPolyTopology(faces, vertices.length).nonIncidencePairs.map((pair, di) => ({ ...pair, di }));
   const dVals = initialD
     ? [...initialD]
     : initializeSquaredSlackValues(base, vertices.length, nonInc);
@@ -222,7 +188,7 @@ export function unpackPlanarGuidedY(
   }
   const d: number[] = [];
   if (mode === "inc_noninc_unit_squared_slack") {
-    const nonInc = buildNonIncidences(faces, vertexCount);
+    const nonInc = buildPolyTopology(faces, vertexCount).nonIncidencePairs;
     const base = lightFullDim(vertexCount, faceCount);
     for (let i = 0; i < nonInc.length; i++) d.push(y[base + i] ?? 0);
   }
@@ -238,12 +204,13 @@ export function computeTotalPlanarityViolation(
 
 export class PlanarGuidedModelBuilder implements MetaModelBuilder {
   private faces: number[][];
+  private topology = buildPolyTopology([], 0);
   private x0: Vec3[];
   private params: ModularGuidedALMParams;
   private handles: HandleSet;
   private yRefProvider: () => ReadonlyArray<number>;
   private mode: ModularConstraintMode;
-  private incidences: Incidence[] = [];
+  private incidences: VertexFaceIncidence[] = [];
   private nonIncidences: NonIncidence[] = [];
 
   constructor(
@@ -255,6 +222,7 @@ export class PlanarGuidedModelBuilder implements MetaModelBuilder {
     mode: ModularConstraintMode
   ) {
     this.faces = faces.map((f) => [...f]);
+    this.topology = buildPolyTopology(this.faces, x0.length);
     this.x0 = x0.map((p) => [p[0], p[1], p[2]]);
     this.params = { ...params };
     this.handles = handles;
@@ -280,9 +248,9 @@ export class PlanarGuidedModelBuilder implements MetaModelBuilder {
   }
 
   private buildPairs() {
-    this.incidences = buildIncidences(this.faces);
+    this.incidences = this.topology.incidencePairs.map((pair) => ({ fi: pair.fi, vi: pair.vi }));
     this.nonIncidences = this.mode === "inc_noninc_unit_squared_slack"
-      ? buildNonIncidences(this.faces, this.x0.length)
+      ? this.topology.nonIncidencePairs.map((pair, di) => ({ fi: pair.fi, vi: pair.vi, di }))
       : [];
   }
 
@@ -308,48 +276,43 @@ export class PlanarGuidedModelBuilder implements MetaModelBuilder {
     const rows: LinearizedRow[] = new Array(mInc + mNon + this.faces.length);
     const c0 = new Array<number>(rows.length);
 
-    for (let ri = 0; ri < mInc; ri++) {
-      const { fi, vi } = this.incidences[ri];
-      const v = readLightVertex(y, vi);
-      const n = readLightNormal(y, this.x0.length, fi);
-      const b = readLightOffset(y, this.x0.length, fi);
+        for (let ri = 0; ri < mInc; ri++) {
+      const pair = this.incidences[ri];
+      const lin = incidenceConstraintLinearization(y, this.x0.length, pair);
       rows[ri] = {
         kind: "inc",
-        fi,
-        vi,
-        gV: [n[0], n[1], n[2]],
-        gN: [v[0], v[1], v[2]],
-        gB: -1,
+        fi: pair.fi,
+        vi: pair.vi,
+        gV: lin.gV,
+        gN: lin.gN,
+        gB: lin.gB,
       };
-      c0[ri] = dot3(n, v) - b;
+      c0[ri] = lin.value;
     }
 
     for (let qi = 0; qi < mNon; qi++) {
       const rowIndex = mInc + qi;
       const pair = this.nonIncidences[qi];
-      const v = readLightVertex(y, pair.vi);
-      const n = readLightNormal(y, this.x0.length, pair.fi);
-      const b = readLightOffset(y, this.x0.length, pair.fi);
       const d = y[this.dIndex(pair.di)];
+      const lin = squaredSlackNonIncidenceConstraintLinearization(y, this.x0.length, pair, d);
       rows[rowIndex] = {
         kind: "noninc",
         fi: pair.fi,
         vi: pair.vi,
         di: pair.di,
-        gV: [n[0], n[1], n[2]],
-        gN: [v[0], v[1], v[2]],
-        gB: -1,
-        gD: 2 * d,
+        gV: lin.gV,
+        gN: lin.gN,
+        gB: lin.gB,
+        gD: lin.gD,
       };
-      // Outward normals convexity: n·v - b = -d^2
-      c0[rowIndex] = dot3(n, v) - b + d * d;
+      c0[rowIndex] = lin.value;
     }
 
     for (let fi = 0; fi < this.faces.length; fi++) {
       const idx = mInc + mNon + fi;
-      const n = readLightNormal(y, this.x0.length, fi);
-      rows[idx] = { kind: "unit", fi, gN: [2 * n[0], 2 * n[1], 2 * n[2]] };
-      c0[idx] = dot3(n, n) - 1;
+      const lin = unitNormalConstraintLinearization(y, this.x0.length, fi);
+      rows[idx] = { kind: "unit", fi, gN: lin.gN };
+      c0[idx] = lin.value;
     }
 
     const applyJ = (v: ReadonlyArray<number>): number[] => {
@@ -425,23 +388,16 @@ export class PlanarGuidedModelBuilder implements MetaModelBuilder {
     const mNon = this.nonIncidences.length;
     const out = new Array<number>(mInc + mNon + this.faces.length);
     for (let ri = 0; ri < mInc; ri++) {
-      const { fi, vi } = this.incidences[ri];
-      const v = readLightVertex(y, vi);
-      const n = readLightNormal(y, this.x0.length, fi);
-      out[ri] = dot3(n, v) - readLightOffset(y, this.x0.length, fi);
+      out[ri] = incidenceConstraintValue(y, this.x0.length, this.incidences[ri]);
     }
     for (let qi = 0; qi < mNon; qi++) {
       const rowIndex = mInc + qi;
       const pair = this.nonIncidences[qi];
-      const v = readLightVertex(y, pair.vi);
-      const n = readLightNormal(y, this.x0.length, pair.fi);
-      const b = readLightOffset(y, this.x0.length, pair.fi);
       const d = y[this.dIndex(pair.di)];
-      out[rowIndex] = dot3(n, v) - b + d * d;
+      out[rowIndex] = squaredSlackNonIncidenceConstraintLinearization(y, this.x0.length, pair, d).value;
     }
     for (let fi = 0; fi < this.faces.length; fi++) {
-      const n = readLightNormal(y, this.x0.length, fi);
-      out[mInc + mNon + fi] = dot3(n, n) - 1;
+      out[mInc + mNon + fi] = unitNormalConstraintValue(y, this.x0.length, fi);
     }
     return out;
   }
@@ -562,3 +518,7 @@ export class PlanarGuidedModelBuilder implements MetaModelBuilder {
     };
   }
 }
+
+
+
+

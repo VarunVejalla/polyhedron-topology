@@ -4,7 +4,7 @@ import { buildPolyDerivedCache } from "./derive";
 import { buildPolyTopology } from "./topology";
 import type { PolyAuxState, PolyDerivedCache, PolyRichState, PolyState, PolyTopologyData } from "./types";
 
-export type PolyFullModel = {
+type PolyFullModel = {
   rich: PolyRichState;
   derived: PolyDerivedCache;
   constraintResiduals?: PolyConstraintResiduals;
