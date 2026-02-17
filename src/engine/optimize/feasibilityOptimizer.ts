@@ -1,5 +1,11 @@
 import type { Vec3 } from "../math/types";
-import type { PolyState } from "../poly";
+import {
+  buildPolyAuxState,
+  buildPolyTopology,
+  computeVolumeAndCenterOfMass,
+  type PolyState,
+  type PolyTopologyData,
+} from "../poly";
 import { normN, solveCG } from "../projection/shared/numeric";
 
 type SparseRow = {
@@ -77,14 +83,6 @@ function sub3(a: ReadonlyArray<number>, b: ReadonlyArray<number>): Vec3 {
   return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 }
 
-function add3(a: ReadonlyArray<number>, b: ReadonlyArray<number>): Vec3 {
-  return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
-}
-
-function mul3(a: ReadonlyArray<number>, s: number): Vec3 {
-  return [a[0] * s, a[1] * s, a[2] * s];
-}
-
 function cross3(a: ReadonlyArray<number>, b: ReadonlyArray<number>): Vec3 {
   return [
     a[1] * b[2] - a[2] * b[1],
@@ -106,8 +104,7 @@ function pushSparseTriplet(row: SparseRow, idx: number, value: number) {
 
 export class FeasibilityOptimizerSession {
   private faces: number[][];
-  private incidencePairs: Array<{ fi: number; vi: number }> = [];
-  private nonIncidencePairs: Array<{ fi: number; vi: number }> = [];
+  private topology: PolyTopologyData;
   private params: FeasibilityOptimizeParams;
 
   private y: number[] = [];
@@ -132,10 +129,10 @@ export class FeasibilityOptimizerSession {
 
   constructor(state: PolyState, params?: Partial<FeasibilityOptimizeParams>) {
     this.faces = state.faces.map((f) => [...f]);
+    this.topology = buildPolyTopology(this.faces, state.vertices.length);
     this.params = { ...defaultParams, ...params };
     this.rho = Math.max(this.params.rhoMin, Math.min(this.params.rhoMax, this.params.rho));
     this.baselineVertices = state.vertices.map((p) => [p[0], p[1], p[2]] as Vec3);
-    this.buildIncidence();
     this.stableFaceIndex = this.resolveStableFaceIndex(this.params.stableFaceIndex);
     this.y = this.packInitialState(state);
     this.refreshAntiPieces(true);
@@ -184,23 +181,6 @@ export class FeasibilityOptimizerSession {
     return y;
   }
 
-  private buildIncidence() {
-    this.incidencePairs = [];
-    const isInc = new Array<Set<number>>(this.faces.length);
-    for (let fi = 0; fi < this.faces.length; fi++) {
-      isInc[fi] = new Set<number>(this.faces[fi]);
-      for (const vi of this.faces[fi]) this.incidencePairs.push({ fi, vi });
-    }
-
-    this.nonIncidencePairs = [];
-    for (let fi = 0; fi < this.faces.length; fi++) {
-      const set = isInc[fi];
-      for (let vi = 0; vi < this.vertexCount(); vi++) {
-        if (!set.has(vi)) this.nonIncidencePairs.push({ fi, vi });
-      }
-    }
-  }
-
   private unpackVertices(y: ReadonlyArray<number>): Vec3[] {
     const out: Vec3[] = new Array(this.vertexCount());
     for (let i = 0; i < this.vertexCount(); i++) {
@@ -208,6 +188,19 @@ export class FeasibilityOptimizerSession {
       out[i] = [y[b], y[b + 1], y[b + 2]];
     }
     return out;
+  }
+
+  private buildStateFromY(y: ReadonlyArray<number>): PolyState {
+    const vertices = this.unpackVertices(y);
+    const facePlanes = new Array(this.faceCount());
+    for (let fi = 0; fi < this.faceCount(); fi++) {
+      const nb = this.nBase(fi);
+      facePlanes[fi] = {
+        n: [y[nb], y[nb + 1], y[nb + 2]] as Vec3,
+        b: y[nb + 3],
+      };
+    }
+    return { vertices, faces: this.faces, facePlanes };
   }
 
   private getUnitPlane(fi: number, y: ReadonlyArray<number>): { n: Vec3; b: number } {
@@ -223,86 +216,17 @@ export class FeasibilityOptimizerSession {
   }
 
   private computeVolumeAndCom(y: ReadonlyArray<number>): { volume: number; centerOfMass: Vec3 } {
-    const v = this.unpackVertices(y);
-    const ref: Vec3 = [0, 0, 0];
-    for (let i = 0; i < v.length; i++) {
-      ref[0] += v[i][0];
-      ref[1] += v[i][1];
-      ref[2] += v[i][2];
-    }
-    if (v.length > 0) {
-      const inv = 1 / v.length;
-      ref[0] *= inv;
-      ref[1] *= inv;
-      ref[2] *= inv;
-    }
-
-    let totalVol = 0;
-    let comNum: Vec3 = [0, 0, 0];
-    for (let fi = 0; fi < this.faces.length; fi++) {
-      const face = this.faces[fi];
-      if (face.length < 3) continue;
-      const plane = this.getUnitPlane(fi, y);
-      const a0 = v[face[0]];
-      for (let i = 1; i + 1 < face.length; i++) {
-        let b = v[face[i]];
-        let c = v[face[i + 1]];
-        let triN = cross3(sub3(b, a0), sub3(c, a0));
-        if (dot3(triN, plane.n) < 0) {
-          const tmp = b;
-          b = c;
-          c = tmp;
-          triN = cross3(sub3(b, a0), sub3(c, a0));
-        }
-
-        const pa = sub3(a0, ref);
-        const pb = sub3(b, ref);
-        const pc = sub3(c, ref);
-        let vol = dot3(pa, cross3(pb, pc)) / 6;
-        if (vol < 0) vol = -vol;
-        if (vol <= 1e-15) continue;
-
-        const tetraC = mul3(add3(add3(add3(ref, a0), b), c), 0.25);
-        comNum[0] += tetraC[0] * vol;
-        comNum[1] += tetraC[1] * vol;
-        comNum[2] += tetraC[2] * vol;
-        totalVol += vol;
-      }
-    }
-
-    if (totalVol <= 1e-15) return { volume: 0, centerOfMass: ref };
-    return {
-      volume: totalVol,
-      centerOfMass: [comNum[0] / totalVol, comNum[1] / totalVol, comNum[2] / totalVol],
-    };
+    return computeVolumeAndCenterOfMass(this.buildStateFromY(y));
   }
 
-  private faceCentroid(fi: number, y: ReadonlyArray<number>): Vec3 {
-    const face = this.faces[fi];
-    const c: Vec3 = [0, 0, 0];
-    if (face.length === 0) return c;
-    for (let i = 0; i < face.length; i++) {
-      const vb = 3 * face[i];
-      c[0] += y[vb];
-      c[1] += y[vb + 1];
-      c[2] += y[vb + 2];
-    }
-    const inv = 1 / face.length;
-    c[0] *= inv;
-    c[1] *= inv;
-    c[2] *= inv;
-    return c;
-  }
-
-  private edgeMargin(fi: number, edgeIdx: number, y: ReadonlyArray<number>): number {
+  private edgeMargin(fi: number, edgeIdx: number, y: ReadonlyArray<number>, auxState?: ReturnType<typeof buildPolyAuxState>): number {
     const face = this.faces[fi];
     if (face.length < 3) return Number.POSITIVE_INFINITY;
-    const { n, b } = this.getUnitPlane(fi, y);
-    const { centerOfMass } = this.computeVolumeAndCom(y);
-    const d = dot3(n, centerOfMass) - b;
-    const q: Vec3 = [centerOfMass[0] - n[0] * d, centerOfMass[1] - n[1] * d, centerOfMass[2] - n[2] * d];
+    const aux = auxState ?? buildPolyAuxState(this.buildStateFromY(y), this.topology);
+    const n = this.getUnitPlane(fi, y).n;
+    const q = aux.projectedComByFace[fi];
 
-    const faceC = this.faceCentroid(fi, y);
+    const faceC = aux.faceCentroid[fi];
     let orientSign = 1;
     for (let i = 0; i < face.length; i++) {
       const aIdx = face[i];
@@ -327,13 +251,13 @@ export class FeasibilityOptimizerSession {
     return s * orientSign;
   }
 
-  private minFaceMargin(fi: number, y: ReadonlyArray<number>): { edge: number; margin: number } {
+  private minFaceMargin(fi: number, y: ReadonlyArray<number>, auxState?: ReturnType<typeof buildPolyAuxState>): { edge: number; margin: number } {
     const face = this.faces[fi];
     if (face.length < 3) return { edge: -1, margin: Number.POSITIVE_INFINITY };
     let bestEdge = 0;
     let bestMargin = Number.POSITIVE_INFINITY;
     for (let ei = 0; ei < face.length; ei++) {
-      const m = this.edgeMargin(fi, ei, y);
+      const m = this.edgeMargin(fi, ei, y, auxState);
       if (m < bestMargin) {
         bestMargin = m;
         bestEdge = ei;
@@ -352,6 +276,7 @@ export class FeasibilityOptimizerSession {
   }
 
   private refreshAntiPieces(force: boolean) {
+    const aux = buildPolyAuxState(this.buildStateFromY(this.y), this.topology);
     const targets: number[] = [];
     for (let fi = 0; fi < this.faces.length; fi++) {
       if (fi === this.stableFaceIndex) continue;
@@ -360,7 +285,7 @@ export class FeasibilityOptimizerSession {
     this.targetAntiFaces = targets;
 
     for (const fi of this.targetAntiFaces) {
-      const candidate = this.minFaceMargin(fi, this.y);
+      const candidate = this.minFaceMargin(fi, this.y, aux);
       const curEdge = this.activeEdgeByFace.get(fi);
       const curDwell = this.dwellByFace.get(fi) ?? 0;
       if (force || curEdge === undefined) {
@@ -368,7 +293,7 @@ export class FeasibilityOptimizerSession {
         this.dwellByFace.set(fi, 0);
         continue;
       }
-      const curMargin = this.edgeMargin(fi, curEdge, this.y);
+      const curMargin = this.edgeMargin(fi, curEdge, this.y, aux);
       const shouldSwitch =
         candidate.edge !== curEdge &&
         curDwell >= this.params.antiMinDwell &&
@@ -384,8 +309,8 @@ export class FeasibilityOptimizerSession {
 
   private evalEqResiduals(y: ReadonlyArray<number>): number[] {
     const out: number[] = [];
-    for (let i = 0; i < this.incidencePairs.length; i++) {
-      const { fi, vi } = this.incidencePairs[i];
+    for (let i = 0; i < this.topology.incidencePairs.length; i++) {
+      const { fi, vi } = this.topology.incidencePairs[i];
       const vb = 3 * vi;
       const nb = this.nBase(fi);
       const c =
@@ -408,8 +333,8 @@ export class FeasibilityOptimizerSession {
     const rows: SparseRow[] = [];
     const cEq: number[] = [];
 
-    for (let i = 0; i < this.incidencePairs.length; i++) {
-      const { fi, vi } = this.incidencePairs[i];
+    for (let i = 0; i < this.topology.incidencePairs.length; i++) {
+      const { fi, vi } = this.topology.incidencePairs[i];
       const vb = 3 * vi;
       const nb = this.nBase(fi);
       const c =
@@ -461,8 +386,8 @@ export class FeasibilityOptimizerSession {
     return { rows, cEq };
   }
 
-  private antiResidual(fi: number, edgeIdx: number, y: ReadonlyArray<number>): number {
-    return this.edgeMargin(fi, edgeIdx, y) + this.params.antiMargin;
+  private antiResidual(fi: number, edgeIdx: number, y: ReadonlyArray<number>, auxState?: ReturnType<typeof buildPolyAuxState>): number {
+    return this.edgeMargin(fi, edgeIdx, y, auxState) + this.params.antiMargin;
   }
 
   private buildIneqRows(y: ReadonlyArray<number>): {
@@ -475,9 +400,10 @@ export class FeasibilityOptimizerSession {
     let maxViolation = 0;
     let activeConvexityCount = 0;
     let activeAntiCount = 0;
+    const aux = buildPolyAuxState(this.buildStateFromY(y), this.topology);
 
-    for (let i = 0; i < this.nonIncidencePairs.length; i++) {
-      const { fi, vi } = this.nonIncidencePairs[i];
+    for (let i = 0; i < this.topology.nonIncidencePairs.length; i++) {
+      const { fi, vi } = this.topology.nonIncidencePairs[i];
       const vb = 3 * vi;
       const nb = this.nBase(fi);
       const g =
@@ -505,7 +431,7 @@ export class FeasibilityOptimizerSession {
     for (const fi of this.targetAntiFaces) {
       const edgeIdx = this.activeEdgeByFace.get(fi);
       if (edgeIdx === undefined) continue;
-      const g = this.antiResidual(fi, edgeIdx, y);
+      const g = this.antiResidual(fi, edgeIdx, y, aux);
       if (g <= 0) continue;
       const row: SparseRow = { idx: [], val: [], c: g };
       for (let k = 0; k < this.vertexDim(); k++) {
