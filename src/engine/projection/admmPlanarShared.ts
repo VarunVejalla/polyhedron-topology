@@ -1,5 +1,6 @@
 import { bestFitPlanePCA, type Plane } from "../math/plane";
 import type { Vec3 } from "../math/types";
+import { v3 } from "../math/vec3";
 
 type VertexIncidence = Array<Array<{ fi: number; li: number }>>;
 
@@ -57,9 +58,7 @@ export function updatePlanarYBlock(
       const vi = f[li];
       const px = x[vi];
       const uu = u[fi][li];
-      v[li][0] = px[0] + uu[0];
-      v[li][1] = px[1] + uu[1];
-      v[li][2] = px[2] + uu[2];
+      v[li] = v3.add(px, uu);
     }
 
     const plane = bestFitPlanePCA(v, prevFaceNormals[fi]);
@@ -71,10 +70,8 @@ export function updatePlanarYBlock(
     const b = plane.b;
     for (let li = 0; li < f.length; li++) {
       const p = v[li];
-      const t = n[0] * p[0] + n[1] * p[1] + n[2] * p[2] - b;
-      yfi[li][0] = p[0] - n[0] * t;
-      yfi[li][1] = p[1] - n[1] * t;
-      yfi[li][2] = p[2] - n[2] * t;
+      const t = v3.dot(n, p) - b;
+      yfi[li] = v3.sub(p, v3.mul(n, t));
     }
   }
 }
@@ -92,9 +89,7 @@ export function updatePlanarDualBlock(
       const uu = u[fi][li];
       const px = x[vi];
       const py = y[fi][li];
-      uu[0] += px[0] - py[0];
-      uu[1] += px[1] - py[1];
-      uu[2] += px[2] - py[2];
+      u[fi][li] = v3.add(uu, v3.sub(px, py));
     }
   }
 }
@@ -112,7 +107,7 @@ export function computePlanarityViolationFromPlanes(
     const b = plane.b;
     for (let k = 0; k < face.length; k++) {
       const p = positions[face[k]];
-      const d = n[0] * p[0] + n[1] * p[1] + n[2] * p[2] - b;
+      const d = v3.dot(n, p) - b;
       total += Math.abs(d);
     }
   }

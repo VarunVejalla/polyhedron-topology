@@ -97,12 +97,9 @@ function laplacianGradient(positions: ReadonlyArray<Vec3>, neighbors: ReadonlyAr
   for (let vi = 0; vi < positions.length; vi++) {
     const adj = neighbors[vi];
     if (adj.length === 0) continue;
-    const avg: Vec3 = [0, 0, 0];
+    let avg: Vec3 = [0, 0, 0];
     for (let i = 0; i < adj.length; i++) {
-      const p = positions[adj[i]];
-      avg[0] += p[0];
-      avg[1] += p[1];
-      avg[2] += p[2];
+      avg = v3.add(avg, positions[adj[i]]);
     }
     const avgScaled = v3.mul(avg, 1 / adj.length);
     out[vi] = v3.sub(positions[vi], avgScaled);
@@ -111,11 +108,9 @@ function laplacianGradient(positions: ReadonlyArray<Vec3>, neighbors: ReadonlyAr
 }
 
 function orientPlanesOutward(positions: ReadonlyArray<Vec3>, planes: ReadonlyArray<Plane>): Array<{ n: Vec3; b: number }> {
-  const center: Vec3 = [0, 0, 0];
+  let center: Vec3 = [0, 0, 0];
   for (let i = 0; i < positions.length; i++) {
-    center[0] += positions[i][0];
-    center[1] += positions[i][1];
-    center[2] += positions[i][2];
+    center = v3.add(center, positions[i]);
   }
   const c = positions.length > 0 ? v3.mul(center, 1 / positions.length) : center;
   return planes.map((plane) => {
@@ -138,9 +133,7 @@ function projectConvexHalfspaces(
   eps: number
 ): void {
   for (let i = 0; i < memory.z.length; i++) {
-    memory.z[i][0] = seed[i][0];
-    memory.z[i][1] = seed[i][1];
-    memory.z[i][2] = seed[i][2];
+    memory.z[i] = cloneVec3(seed[i]);
   }
   const oriented = orientPlanesOutward(seed, memory.facePlanes);
   for (let pass = 0; pass < passes; pass++) {
@@ -150,12 +143,9 @@ function projectConvexHalfspaces(
       const rhs = b - eps;
       for (let vi = 0; vi < memory.z.length; vi++) {
         if (faceSet.has(vi)) continue;
-        const p = memory.z[vi];
-        const d = n[0] * p[0] + n[1] * p[1] + n[2] * p[2] - rhs;
+        const d = v3.dot(n, memory.z[vi]) - rhs;
         if (d <= 0) continue;
-        p[0] -= d * n[0];
-        p[1] -= d * n[1];
-        p[2] -= d * n[2];
+        memory.z[vi] = v3.sub(memory.z[vi], v3.mul(n, d));
       }
     }
   }
@@ -205,32 +195,22 @@ const kernel: OptimizerKernel<PlanarState, ProjectorParams, PlanarMemory, Planar
         const deg = memory.incidence[vi].length;
         const target = state.handles.get(vi) ?? state.baseline[vi];
         const w = state.handles.has(vi) ? wHandle : wFree;
-        let sum0 = 0;
-        let sum1 = 0;
-        let sum2 = 0;
+        let sum: Vec3 = [0, 0, 0];
         for (let k = 0; k < deg; k++) {
           const { fi, li } = memory.incidence[vi][k];
           const y = memory.y[fi][li];
           const u = memory.u[fi][li];
-          sum0 += y[0] - u[0];
-          sum1 += y[1] - u[1];
-          sum2 += y[2] - u[2];
+          sum = v3.add(sum,v3.sub(y,u));
         }
         let denom = w + rho * deg;
         if (model.flavor === "convex") {
-          sum0 += memory.z[vi][0] - memory.q[vi][0];
-          sum1 += memory.z[vi][1] - memory.q[vi][1];
-          sum2 += memory.z[vi][2] - memory.q[vi][2];
+          sum = v3.add(sum, v3.sub(memory.z[vi], memory.q[vi]));
           denom += rho;
         }
         const inv = 1 / Math.max(1e-12, denom);
-        state.positions[vi][0] = (w * target[0] + rho * sum0) * inv;
-        state.positions[vi][1] = (w * target[1] + rho * sum1) * inv;
-        state.positions[vi][2] = (w * target[2] + rho * sum2) * inv;
+        state.positions[vi] = v3.mul(v3.add(v3.mul(target, w), v3.mul(sum, rho)), inv);
         if (regGrad) {
-          state.positions[vi][0] -= (lambdaReg * regGrad[vi][0]) * inv;
-          state.positions[vi][1] -= (lambdaReg * regGrad[vi][1]) * inv;
-          state.positions[vi][2] -= (lambdaReg * regGrad[vi][2]) * inv;
+          state.positions[vi] = v3.sub(state.positions[vi], v3.mul(regGrad[vi], lambdaReg * inv));
         }
       }
 
@@ -254,9 +234,7 @@ const kernel: OptimizerKernel<PlanarState, ProjectorParams, PlanarMemory, Planar
       updatePlanarDualBlock(model.faces, state.positions, memory.y, memory.u);
       if (model.flavor === "convex") {
         for (let i = 0; i < state.positions.length; i++) {
-          memory.q[i][0] += state.positions[i][0] - memory.z[i][0];
-          memory.q[i][1] += state.positions[i][1] - memory.z[i][1];
-          memory.q[i][2] += state.positions[i][2] - memory.z[i][2];
+          memory.q[i] = v3.add(memory.q[i], v3.sub(state.positions[i], memory.z[i]));
         }
       }
       memory.totalPlanarityViolation = computePlanarityViolationFromPlanes(
