@@ -43,7 +43,6 @@ type PlanarMemory = {
   vbuf: Vec3[][];
   z: Vec3[];
   q: Vec3[];
-  vertexNeighbors: number[][];
   faceVertexSets: Array<Set<number>>;
   prevFaceNormals: Array<Vec3 | undefined>;
   facePlanes: Plane[];
@@ -74,37 +73,6 @@ function cloneVec3(p: ReadonlyArray<number>): Vec3 {
 
 function cloneVec3List(points: ReadonlyArray<ReadonlyArray<number>>): Vec3[] {
   return points.map((p) => cloneVec3(p));
-}
-
-function buildVertexNeighbors(faces: ReadonlyArray<ReadonlyArray<number>>, vertexCount: number): number[][] {
-  const out = Array.from({ length: vertexCount }, () => new Set<number>());
-  for (let fi = 0; fi < faces.length; fi++) {
-    const face = faces[fi];
-    for (let i = 0; i < face.length; i++) {
-      const a = face[i];
-      const b = face[(i + 1) % face.length];
-      if (a >= 0 && a < vertexCount && b >= 0 && b < vertexCount) {
-        out[a].add(b);
-        out[b].add(a);
-      }
-    }
-  }
-  return out.map((s) => [...s]);
-}
-
-function laplacianGradient(positions: ReadonlyArray<Vec3>, neighbors: ReadonlyArray<ReadonlyArray<number>>): Vec3[] {
-  const out = positions.map(() => [0, 0, 0] as Vec3);
-  for (let vi = 0; vi < positions.length; vi++) {
-    const adj = neighbors[vi];
-    if (adj.length === 0) continue;
-    let avg: Vec3 = [0, 0, 0];
-    for (let i = 0; i < adj.length; i++) {
-      avg = v3.add(avg, positions[adj[i]]);
-    }
-    const avgScaled = v3.mul(avg, 1 / adj.length);
-    out[vi] = v3.sub(positions[vi], avgScaled);
-  }
-  return out;
 }
 
 function orientPlanesOutward(positions: ReadonlyArray<Vec3>, planes: ReadonlyArray<Plane>): Array<{ n: Vec3; b: number }> {
@@ -162,7 +130,6 @@ function createPlanarMemory(model: PlanarModel, state: PlanarState): PlanarMemor
     vbuf: planar.vbuf,
     z: cloneVec3List(state.positions),
     q: state.positions.map(() => [0, 0, 0] as Vec3),
-    vertexNeighbors: buildVertexNeighbors(model.faces, state.positions.length),
     faceVertexSets: model.faces.map((face) => new Set<number>(face)),
     prevFaceNormals,
     facePlanes,
@@ -185,12 +152,10 @@ const kernel: OptimizerKernel<PlanarState, ProjectorParams, PlanarMemory, Planar
     const rho = Math.max(1e-8, params.rho);
     const wFree = Math.max(0, params.wFree);
     const wHandle = Math.max(0, params.wHandle);
-    const lambdaReg = model.flavor === "regular" ? Math.max(0, params.lambdaReg) : 0;
     const convexPasses = Math.max(1, model.flavor === "convex" ? Math.floor(params.itersPerFrame) : 1);
     const convexEps = 1e-6;
 
     for (let it = 0; it < iterations; it++) {
-      const regGrad = lambdaReg > 0 ? laplacianGradient(state.positions, memory.vertexNeighbors) : null;
       for (let vi = 0; vi < state.positions.length; vi++) {
         const deg = memory.incidence[vi].length;
         const target = state.handles.get(vi) ?? state.baseline[vi];
@@ -209,9 +174,6 @@ const kernel: OptimizerKernel<PlanarState, ProjectorParams, PlanarMemory, Planar
         }
         const inv = 1 / Math.max(1e-12, denom);
         state.positions[vi] = v3.mul(v3.add(v3.mul(target, w), v3.mul(sum, rho)), inv);
-        if (regGrad) {
-          state.positions[vi] = v3.sub(state.positions[vi], v3.mul(regGrad[vi], lambdaReg * inv));
-        }
       }
 
       updatePlanarYBlock(

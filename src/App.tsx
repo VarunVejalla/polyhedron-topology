@@ -255,11 +255,6 @@ export default function App() {
             </label>
 
             <label className="toolbarField">
-              lambdaReg
-              <input type="number" value={doc.projection.lambdaReg} onChange={(e) => dispatch({ type: "SET_PROJECTION", patch: { lambdaReg: Number(e.target.value) } })} />
-            </label>
-
-            <label className="toolbarField">
               iters/frame
               <input
                 type="number"
@@ -366,7 +361,6 @@ export default function App() {
                 rho: doc.projection.rho,
                 wFree: doc.projection.wFree,
                 wHandle: doc.projection.wHandle,
-                lambdaReg: doc.projection.lambdaReg,
                 itersPerFrame: doc.projection.itersPerFrame,
                 itersOnRelease: doc.projection.itersOnRelease,
               }}

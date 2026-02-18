@@ -31,7 +31,6 @@ type ProjectionState = {
   rho: number;
   wFree: number;
   wHandle: number;
-  lambdaReg: number;
   itersPerFrame: number;
   itersOnRelease: number;
   hardProjectMode: "iters" | "tol";
@@ -112,11 +111,10 @@ export function createInitialState(): DocumentState {
     faceGraph: pair?.faceGraph ?? initialVertexGraph,
     poly: { vertices: initialPoly.vertices, faces: PRISM_FACES },
     projection: {
-      method: "admm",
+      method: "planar",
       rho: 10,
       wFree: 1,
       wHandle: 1e5,
-      lambdaReg: 0,
       itersPerFrame: 10,
       itersOnRelease: 120,
       hardProjectMode: "iters",

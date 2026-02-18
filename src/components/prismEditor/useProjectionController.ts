@@ -60,7 +60,6 @@ export function useProjectionController(
       rho: params.rho,
       wFree: params.wFree,
       wHandle: params.wHandle,
-      lambdaReg: params.lambdaReg,
       itersPerFrame: params.itersPerFrame,
       itersOnRelease: params.itersOnRelease,
     });
