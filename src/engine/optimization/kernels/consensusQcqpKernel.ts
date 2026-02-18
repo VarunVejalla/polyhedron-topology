@@ -1,4 +1,4 @@
-import { projectQcqp1 } from "../qcqp1Projector";
+import { createQcqp1Cache, projectQcqp1, type QCQP1Cache } from "../qcqp1Projector";
 import type {
   ConstraintSense,
   IndexedQuadraticForm,
@@ -39,13 +39,18 @@ type LocalBlock = {
   form: IndexedQuadraticForm;
   z: number[];
   u: number[];
+  mu: number;
+  cache: QCQP1Cache;
+  groupKey: string;
 };
 
 export type ConsensusQcqpMemory = {
   locals: LocalBlock[];
   zById: Record<string, number[]>;
   uById: Record<string, number[]>;
+  muById: Record<string, number>;
   diagCounts: number[];
+  groups: Record<string, number[]>;
   primalResidual: number;
   dualResidual: number;
 };
@@ -141,27 +146,56 @@ function cloneArrayMap(src?: Readonly<Record<string, number[]>>): Record<string,
   return out;
 }
 
+function cloneNumberMap(src?: Readonly<Record<string, number>>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const k in src) out[k] = src[k];
+  return out;
+}
+
+function signatureForForm(form: Readonly<IndexedQuadraticForm>): string {
+  const round = (x: number) => {
+    const y = Math.round(x * 1e9) / 1e9;
+    return Object.is(y, -0) ? 0 : y;
+  };
+  const a = form.A.map((r) => r.map(round).join(",")).join(";");
+  const b = form.b.map(round).join(",");
+  return `${form.indices.length}|${a}|${b}|${round(form.c)}`;
+}
+
 function buildLocals(
   model: ConsensusQcqpModel,
   state: ConsensusQcqpState,
   resume?: ConsensusQcqpMemory
-): { locals: LocalBlock[]; diagCounts: number[] } {
+): { locals: LocalBlock[]; diagCounts: number[]; groups: Record<string, number[]> } {
   const zById = resume?.zById ?? {};
   const uById = resume?.uById ?? {};
+  const muById = resume?.muById ?? {};
+  const cacheBySig = new Map<string, QCQP1Cache>();
   const locals: LocalBlock[] = new Array(model.constraints.length);
   const diagCounts = new Array<number>(model.dim).fill(0);
+  const groups: Record<string, number[]> = {};
 
   for (let i = 0; i < model.constraints.length; i++) {
     const c = model.constraints[i];
     const indices = c.form.indices.slice();
     const zPrev = zById[c.id];
     const uPrev = uById[c.id];
+    const muPrev = muById[c.id] ?? 0;
+    const sig = signatureForForm(c.form);
+    let cache = cacheBySig.get(sig);
+    if (!cache) {
+      cache = createQcqp1Cache(c.form);
+      cacheBySig.set(sig, cache);
+    }
+    const groupKey = `${cache.kind}:${sig}:${c.sense}`;
+    if (!groups[groupKey]) groups[groupKey] = [];
+    groups[groupKey].push(i);
     const z = indices.map((idx, j) => zPrev && zPrev.length === indices.length ? zPrev[j] : state.x[idx]);
     const u = indices.map((_, j) => (uPrev && uPrev.length === indices.length ? uPrev[j] : 0));
     for (let j = 0; j < indices.length; j++) diagCounts[indices[j]] += 1;
-    locals[i] = { id: c.id, sense: c.sense, indices, form: c.form, z, u };
+    locals[i] = { id: c.id, sense: c.sense, indices, form: c.form, z, u, mu: muPrev, cache, groupKey };
   }
-  return { locals, diagCounts };
+  return { locals, diagCounts, groups };
 }
 
 export const consensusQcqpKernel: OptimizerKernel<
@@ -177,8 +211,10 @@ export const consensusQcqpKernel: OptimizerKernel<
     return {
       locals: built.locals,
       diagCounts: built.diagCounts,
+      groups: built.groups,
       zById: cloneArrayMap(resume?.zById),
       uById: cloneArrayMap(resume?.uById),
+      muById: cloneNumberMap(resume?.muById),
       primalResidual: resume?.primalResidual ?? 0,
       dualResidual: resume?.dualResidual ?? 0,
     };
@@ -206,26 +242,38 @@ export const consensusQcqpKernel: OptimizerKernel<
 
       let primalSq = 0;
       let dualSq = 0;
-      for (let i = 0; i < memory.locals.length; i++) {
-        const block = memory.locals[i];
-        const v = block.indices.map((idx, j) => state.x[idx] + block.u[j]);
-        const zOld = block.z.slice();
-        const proj = projectQcqp1(v, block.form, block.sense, {
-          tol: params.qcqpTol,
-          maxNewtonIters: params.qcqpMaxNewtonIters,
-        });
-        block.z = proj.z;
+      const groupKeys = Object.keys(memory.groups);
+      // Grouped processing keeps constraints with identical structure together,
+      // enabling shared caches and a future worker-pool parallel implementation.
+      for (let g = 0; g < groupKeys.length; g++) {
+        const key = groupKeys[g];
+        const group = memory.groups[key];
+        for (let ii = 0; ii < group.length; ii++) {
+          const i = group[ii];
+          const block = memory.locals[i];
+          const v = block.indices.map((idx, j) => state.x[idx] + block.u[j]);
+          const zOld = block.z.slice();
+          const proj = projectQcqp1(v, block.form, block.sense, {
+            tol: params.qcqpTol,
+            maxNewtonIters: params.qcqpMaxNewtonIters,
+            cache: block.cache,
+            mu0: block.mu,
+          });
+          block.z = proj.z;
+          block.mu = proj.mu;
 
-        for (let j = 0; j < block.indices.length; j++) {
-          const r = state.x[block.indices[j]] - block.z[j];
-          block.u[j] += r;
-          primalSq += r * r;
-          const dz = block.z[j] - zOld[j];
-          dualSq += dz * dz;
+          for (let j = 0; j < block.indices.length; j++) {
+            const r = state.x[block.indices[j]] - block.z[j];
+            block.u[j] += r;
+            primalSq += r * r;
+            const dz = block.z[j] - zOld[j];
+            dualSq += dz * dz;
+          }
+
+          memory.zById[block.id] = block.z.slice();
+          memory.uById[block.id] = block.u.slice();
+          memory.muById[block.id] = block.mu;
         }
-
-        memory.zById[block.id] = block.z.slice();
-        memory.uById[block.id] = block.u.slice();
       }
       memory.primalResidual = Math.sqrt(primalSq);
       memory.dualResidual = rho * Math.sqrt(dualSq);
