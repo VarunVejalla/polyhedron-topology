@@ -188,7 +188,7 @@ const kernel: OptimizerKernel<PlanarState, ProjectorParams, PlanarMemory, Planar
 
       if (model.flavor === "convex") {
         const seed = state.positions.map(
-          (p, i) => [p[0] + memory.q[i][0], p[1] + memory.q[i][1], p[2] + memory.q[i][2]] as Vec3
+          (p, i) => v3.add(p, memory.q[i])
         );
         projectConvexHalfspaces(model, memory, seed, convexPasses, convexEps);
       }

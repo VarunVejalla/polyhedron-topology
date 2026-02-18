@@ -26,9 +26,29 @@ export type QuadraticConstraint = {
   form: QuadraticForm;
 };
 
+export type IndexedQuadraticForm = {
+  // Global variable indices touched by this quadratic.
+  indices: number[];
+  // Local quadratic over the selected indices.
+  A: DenseMatrix;
+  b: number[];
+  c: number;
+};
+
+export type IndexedQuadraticConstraint = {
+  id: string;
+  sense: ConstraintSense;
+  form: IndexedQuadraticForm;
+};
+
 export type QuadraticConstraintSet = {
   equalities: QuadraticConstraint[];
   inequalities: QuadraticConstraint[];
+};
+
+export type IndexedQuadraticConstraintSet = {
+  equalities: IndexedQuadraticConstraint[];
+  inequalities: IndexedQuadraticConstraint[];
 };
 
 export type FunctionConstraintSet = {
@@ -42,6 +62,7 @@ export type QuadraticObjectiveProvider = (x: ReadonlyArray<number>) => Quadratic
 
 export type OptimizationModel = {
   quadraticConstraints: QuadraticConstraintSet;
+  indexedQuadraticConstraints?: IndexedQuadraticConstraintSet;
   exactConstraints: FunctionConstraintSet;
   localQuadraticConstraints?: QuadraticProvider;
   metric?: ScalarFunction;
