@@ -7,13 +7,13 @@ import type {
   QuadraticForm,
 } from "../types";
 
-export type ConsensusConstraint = {
+type ConsensusConstraint = {
   id: string;
   sense: ConstraintSense;
   form: IndexedQuadraticForm;
 };
 
-export type ConsensusQcqpModel = {
+type ConsensusQcqpModel = {
   dim: number;
   objective: QuadraticForm;
   constraints: ConsensusConstraint[];
