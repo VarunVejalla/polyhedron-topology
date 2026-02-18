@@ -9,20 +9,16 @@ function normalizePlane(plane: PlaneEq): PlaneEq {
 }
 
 function averageVertices(vertices: ReadonlyArray<Vec3>, ids?: ReadonlyArray<number>): Vec3 {
-  const c: Vec3 = [0, 0, 0];
+  let c: Vec3 = [0, 0, 0];
   const n = ids ? ids.length : vertices.length;
   if (n === 0) return c;
   if (ids) {
     for (let i = 0; i < ids.length; i++) {
-      c[0] += vertices[ids[i]][0];
-      c[1] += vertices[ids[i]][1];
-      c[2] += vertices[ids[i]][2];
+      c = v3.add(c, vertices[ids[i]]);
     }
   } else {
     for (let i = 0; i < vertices.length; i++) {
-      c[0] += vertices[i][0];
-      c[1] += vertices[i][1];
-      c[2] += vertices[i][2];
+      c = v3.add(c, vertices[i]);
     }
   }
   return v3.mul(c, 1 / n);
@@ -53,20 +49,15 @@ export function buildPolyAuxState(
     const n = planes[fi].n;
     const b = planes[fi].b;
     const incs = topology.edgeIncidencesByFace[fi];
-    let a0 = 0;
-    let a1 = 0;
-    let a2 = 0;
+    let a: Vec3 = [0, 0, 0];
     const incArea: number[] = new Array(incs.length);
     for (let li = 0; li < incs.length; li++) {
       const inc: FaceEdgeIncidence = incs[li];
       const t = edgeCross[inc.edgeIndex];
       const sign = inc.sign;
-      a0 += 0.5 * sign * t[0];
-      a1 += 0.5 * sign * t[1];
-      a2 += 0.5 * sign * t[2];
+      a = v3.add(a, v3.mul(t, 0.5 * sign));
       incArea[li] = sign * v3.dot(n, t);
     }
-    const a: Vec3 = [a0, a1, a2];
     faceVectorArea[fi] = a;
     const A = v3.dot(n, a);
     faceScalarArea[fi] = A;
@@ -77,19 +68,15 @@ export function buildPolyAuxState(
     if (Math.abs(denom) <= 1e-12) {
       faceCentroid[fi] = averageVertices(state.vertices, state.faces[fi]);
     } else {
-      let sx = 0;
-      let sy = 0;
-      let sz = 0;
+      let s: Vec3 = [0, 0, 0];
       for (let li = 0; li < incs.length; li++) {
         const inc = incs[li];
         const pI = state.vertices[inc.from];
         const pJ = state.vertices[inc.to];
         const w = incArea[li];
-        sx += (pI[0] + pJ[0]) * w;
-        sy += (pI[1] + pJ[1]) * w;
-        sz += (pI[2] + pJ[2]) * w;
+        s = v3.add(s, v3.mul(v3.add(pI, pJ), w));
       }
-      faceCentroid[fi] = [sx / denom, sy / denom, sz / denom];
+      faceCentroid[fi] = v3.mul(s, 1 / denom);
     }
   }
 
@@ -98,17 +85,13 @@ export function buildPolyAuxState(
 
   let centerOfMass: Vec3 = averageVertices(state.vertices);
   if (Math.abs(volume) > 1e-12) {
-    let sx = 0;
-    let sy = 0;
-    let sz = 0;
+    let s: Vec3 = [0, 0, 0];
     for (let fi = 0; fi < state.faces.length; fi++) {
       const w = facePyramidVolume[fi];
-      sx += w * faceCentroid[fi][0];
-      sy += w * faceCentroid[fi][1];
-      sz += w * faceCentroid[fi][2];
+      s = v3.add(s, v3.mul(faceCentroid[fi], w));
     }
     const scale = 3 / (4 * volume);
-    centerOfMass = [sx * scale, sy * scale, sz * scale];
+    centerOfMass = v3.mul(s, scale);
   }
 
   const projectedComByFace: Vec3[] = new Array(state.faces.length);
@@ -118,11 +101,7 @@ export function buildPolyAuxState(
     const b = planes[fi].b;
     const d = v3.dot(n, centerOfMass) - b;
     faceComDistance[fi] = d;
-    projectedComByFace[fi] = [
-      centerOfMass[0] - d * n[0],
-      centerOfMass[1] - d * n[1],
-      centerOfMass[2] - d * n[2],
-    ];
+    projectedComByFace[fi] = v3.sub(centerOfMass, v3.mul(n, d));
   }
 
   return {

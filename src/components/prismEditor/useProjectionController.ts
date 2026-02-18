@@ -35,6 +35,7 @@ export function useProjectionController(
   const topologyKey = useMemo(() => JSON.stringify(cleanFaces), [cleanFaces]);
 
   const projectorRef = useRef<IProjector | null>(null);
+  const projectorTopologyKeyRef = useRef(topologyKey);
   const handlesRef = useRef<Map<number, Vec3>>(new Map());
   const baselineRef = useRef<Vec3[]>(cloneVertices(initialVertices));
   const paramsRef = useRef<ProjectorParams>({ ...params });
@@ -70,13 +71,17 @@ export function useProjectionController(
     if (sameVertices(baselineRef.current, nextBaseline)) return;
     baselineRef.current = nextBaseline;
     handlesRef.current.clear();
-    projectorRef.current?.reset(nextBaseline);
+    const projector = projectorRef.current;
+    const sameTopology = projectorTopologyKeyRef.current === topologyKey;
+    const sameVertexCount = (projector?.getPositionsRef().length ?? nextBaseline.length) === nextBaseline.length;
+    if (projector && sameTopology && sameVertexCount) projector.reset(nextBaseline);
     syncDerived(nextBaseline);
-  }, [initialVertices, syncDerived]);
+  }, [initialVertices, topologyKey, syncDerived]);
 
   useEffect(() => {
     handlesRef.current.clear();
     projectorRef.current = createProjector(method, cleanFaces, baselineRef.current, paramsRef.current);
+    projectorTopologyKeyRef.current = topologyKey;
     lastPlanesRef.current = [];
     syncDerived(baselineRef.current);
   }, [method, topologyKey, cleanFaces, syncDerived]);

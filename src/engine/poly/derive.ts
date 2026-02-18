@@ -149,6 +149,7 @@ function sixColorPlanar(nodes: number[], neighbors: Map<number, Set<number>>): M
   }
 
   const color = new Map<number, number>();
+  const colorUseCount = new Array<number>(6).fill(0);
   while (stack.length > 0) {
     const v = stack.pop() as number;
     const used = new Array<boolean>(6).fill(false);
@@ -157,14 +158,16 @@ function sixColorPlanar(nodes: number[], neighbors: Map<number, Set<number>>): M
       if (c !== undefined && c >= 0 && c < 6) used[c] = true;
     }
     let assigned = -1;
+    let bestCount = Number.POSITIVE_INFINITY;
     for (let c = 0; c < 6; c++) {
-      if (!used[c]) {
+      if (!used[c] && colorUseCount[c] < bestCount) {
         assigned = c;
-        break;
+        bestCount = colorUseCount[c];
       }
     }
     if (assigned < 0) throw new Error("sixColorPlanar failed: no available color in 0..5");
     color.set(v, assigned);
+    colorUseCount[assigned] += 1;
   }
   return color;
 }
