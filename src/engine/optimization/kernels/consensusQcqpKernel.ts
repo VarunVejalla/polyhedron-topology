@@ -30,6 +30,14 @@ export type ConsensusQcqpParams = {
   linearSolveShift: number;
   qcqpTol: number;
   qcqpMaxNewtonIters: number;
+  qcqpFeasTol: number;
+  qcqpKktTol: number;
+  logQcqpFailures: boolean;
+  throwOnQcqpFailure: boolean;
+  recombineMode: "closed_form" | "sequential";
+  sequentialPasses: number;
+  sequentialLocalStep: number;
+  sequentialObjectiveStep: number;
 };
 
 type LocalBlock = {
@@ -135,6 +143,51 @@ function solveX(
   return x;
 }
 
+function matVec(A: ReadonlyArray<ReadonlyArray<number>>, x: ReadonlyArray<number>): number[] {
+  const out = new Array<number>(x.length).fill(0);
+  for (let i = 0; i < A.length; i++) {
+    const row = A[i];
+    let s = 0;
+    for (let j = 0; j < x.length; j++) s += (row?.[j] ?? 0) * x[j];
+    out[i] = s;
+  }
+  return out;
+}
+
+function recombineSequential(args: {
+  xInit: ReadonlyArray<number>;
+  objective: Readonly<QuadraticForm>;
+  locals: ReadonlyArray<LocalBlock>;
+  passes: number;
+  localStep: number;
+  objectiveStep: number;
+}): number[] {
+  const x = args.xInit.slice();
+  const passes = Math.max(1, Math.floor(args.passes));
+  const localStep = Math.max(0, args.localStep);
+  const objectiveStep = Math.max(0, args.objectiveStep);
+  const A = symmetrize(args.objective.A);
+  const b = args.objective.b;
+
+  for (let pass = 0; pass < passes; pass++) {
+    for (let i = 0; i < args.locals.length; i++) {
+      const block = args.locals[i];
+      for (let j = 0; j < block.indices.length; j++) {
+        const gi = block.indices[j];
+        const target = (block.z[j] ?? 0) - (block.u[j] ?? 0);
+        x[gi] -= localStep * (x[gi] - target);
+      }
+    }
+    if (objectiveStep > 0) {
+      const grad = matVec(A, x);
+      for (let i = 0; i < x.length; i++) {
+        x[i] -= objectiveStep * (grad[i] + (b[i] ?? 0));
+      }
+    }
+  }
+  return x;
+}
+
 function cloneArrayMap(src?: Readonly<Record<string, number[]>>): Record<string, number[]> {
   const out: Record<string, number[]> = {};
   for (const k in src) out[k] = src[k].slice();
@@ -189,23 +242,42 @@ export const consensusQcqpKernel: OptimizerKernel<
     const rho = Math.max(1e-8, params.rho);
     const prox = Math.max(0, params.proximalWeight);
     const shift = Math.max(0, params.linearSolveShift);
+    const feasTol = Math.max(1e-12, params.qcqpFeasTol);
+    const kktTol = Math.max(1e-12, params.qcqpKktTol);
+    const logQcqpFailures = params.logQcqpFailures;
+    const throwOnQcqpFailure = params.throwOnQcqpFailure;
+    const recombineMode = params.recombineMode;
 
     for (let it = 0; it < iterations; it++) {
-      const accum = new Array<number>(model.dim).fill(0);
-      for (let i = 0; i < memory.locals.length; i++) {
-        const block = memory.locals[i];
-        for (let j = 0; j < block.indices.length; j++) {
-          accum[block.indices[j]] += (block.z[j] ?? 0) - (block.u[j] ?? 0);
+      if (recombineMode === "sequential") {
+        state.x = recombineSequential({
+          xInit: state.x,
+          objective: model.objective,
+          locals: memory.locals,
+          passes: params.sequentialPasses,
+          localStep: params.sequentialLocalStep,
+          objectiveStep: params.sequentialObjectiveStep,
+        });
+      } else {
+        const accum = new Array<number>(model.dim).fill(0);
+        for (let i = 0; i < memory.locals.length; i++) {
+          const block = memory.locals[i];
+          for (let j = 0; j < block.indices.length; j++) {
+            accum[block.indices[j]] += (block.z[j] ?? 0) - (block.u[j] ?? 0);
+          }
         }
-      }
 
-      const rhs = new Array<number>(model.dim);
-      for (let k = 0; k < model.dim; k++) rhs[k] = -((model.objective.b[k] ?? 0)) + rho * accum[k];
-      const xNew = solveX(model.objective, rhs, memory.diagCounts, rho, prox, shift);
-      state.x = xNew;
+        const rhs = new Array<number>(model.dim);
+        for (let k = 0; k < model.dim; k++) rhs[k] = -((model.objective.b[k] ?? 0)) + rho * accum[k];
+        const xNew = solveX(model.objective, rhs, memory.diagCounts, rho, prox, shift);
+        state.x = xNew;
+      }
 
       let primalSq = 0;
       let dualSq = 0;
+      let maxLocalPrimalViolation = 0;
+      let maxLocalKktResidual = 0;
+      let localFailureCount = 0;
       for (let i = 0; i < memory.locals.length; i++) {
         const block = memory.locals[i];
         const v = block.indices.map((idx, j) => state.x[idx] + block.u[j]);
@@ -215,6 +287,29 @@ export const consensusQcqpKernel: OptimizerKernel<
           maxNewtonIters: params.qcqpMaxNewtonIters,
         });
         block.z = proj.z;
+
+        maxLocalPrimalViolation = Math.max(maxLocalPrimalViolation, proj.primalViolation);
+        maxLocalKktResidual = Math.max(maxLocalKktResidual, proj.kktResidual);
+        const localFeasible = proj.primalViolation <= feasTol;
+        const localKktGood = proj.kktResidual <= kktTol;
+        if (!localFeasible || !localKktGood) {
+          localFailureCount += 1;
+          if (logQcqpFailures) {
+            console.warn(
+              `[consensus_qcqp] QCQP-1 issue: block=${block.id} sense=${block.sense} ` +
+              `primalViolation=${proj.primalViolation.toExponential(3)} ` +
+              `kktResidual=${proj.kktResidual.toExponential(3)} qValue=${proj.qValue.toExponential(3)} ` +
+              `mu=${proj.mu.toExponential(3)} converged=${proj.converged} iter=${proj.iterations}`
+            );
+          }
+          if (throwOnQcqpFailure) {
+            throw new Error(
+              `[consensus_qcqp] QCQP-1 infeasible/non-KKT on block=${block.id}: ` +
+              `primalViolation=${proj.primalViolation}, kktResidual=${proj.kktResidual}, ` +
+              `qValue=${proj.qValue}, mu=${proj.mu}, converged=${proj.converged}, iterations=${proj.iterations}`
+            );
+          }
+        }
 
         for (let j = 0; j < block.indices.length; j++) {
           const r = state.x[block.indices[j]] - block.z[j];
@@ -229,6 +324,15 @@ export const consensusQcqpKernel: OptimizerKernel<
       }
       memory.primalResidual = Math.sqrt(primalSq);
       memory.dualResidual = rho * Math.sqrt(dualSq);
+      if (logQcqpFailures && localFailureCount > 0) {
+        console.warn(
+          `[consensus_qcqp] iteration=${it} localFailures=${localFailureCount}/${memory.locals.length} ` +
+          `maxLocalPrimalViolation=${maxLocalPrimalViolation.toExponential(3)} ` +
+          `maxLocalKktResidual=${maxLocalKktResidual.toExponential(3)} ` +
+          `consensusPrimal=${memory.primalResidual.toExponential(3)} ` +
+          `consensusDual=${memory.dualResidual.toExponential(3)}`
+        );
+      }
 
       const smallStep = dot(state.x, state.x) > 0
         ? memory.primalResidual / Math.max(1e-12, Math.sqrt(dot(state.x, state.x))) < 1e-9

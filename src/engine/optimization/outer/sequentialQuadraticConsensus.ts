@@ -14,6 +14,14 @@ export type SequentialConsensusParams = {
   linearSolveShift: number;
   qcqpTol: number;
   qcqpMaxNewtonIters: number;
+  qcqpFeasTol: number;
+  qcqpKktTol: number;
+  logQcqpFailures: boolean;
+  throwOnQcqpFailure: boolean;
+  recombineMode: "closed_form" | "sequential";
+  sequentialPasses: number;
+  sequentialLocalStep: number;
+  sequentialObjectiveStep: number;
   relinearizeEvery: number;
   innerIterationsPerOuter: number;
 };
@@ -42,6 +50,14 @@ export class SequentialQuadraticConsensusSolver {
       linearSolveShift: Math.max(0, this.params.linearSolveShift),
       qcqpTol: Math.max(1e-12, this.params.qcqpTol),
       qcqpMaxNewtonIters: Math.max(4, Math.floor(this.params.qcqpMaxNewtonIters)),
+      qcqpFeasTol: Math.max(1e-12, this.params.qcqpFeasTol),
+      qcqpKktTol: Math.max(1e-12, this.params.qcqpKktTol),
+      logQcqpFailures: this.params.logQcqpFailures,
+      throwOnQcqpFailure: this.params.throwOnQcqpFailure,
+      recombineMode: this.params.recombineMode,
+      sequentialPasses: Math.max(1, Math.floor(this.params.sequentialPasses)),
+      sequentialLocalStep: Math.max(0, this.params.sequentialLocalStep),
+      sequentialObjectiveStep: Math.max(0, this.params.sequentialObjectiveStep),
     };
   }
 

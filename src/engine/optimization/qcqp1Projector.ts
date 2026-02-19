@@ -12,6 +12,14 @@ type QCQP1ProjectResult = {
   z: number[];
   converged: boolean;
   iterations: number;
+  qValue: number;
+  primalViolation: number;
+  mu: number;
+  stationarityResidual: number;
+  dualResidual: number;
+  complementarityResidual: number;
+  kktResidual: number;
+  feasible: boolean;
 };
 
 function dot(a: ReadonlyArray<number>, b: ReadonlyArray<number>): number {
@@ -34,6 +42,65 @@ function matVec(A: Readonly<DenseMatrix>, x: ReadonlyArray<number>): number[] {
 function evaluateForm(form: Readonly<IndexedQuadraticForm>, z: ReadonlyArray<number>): number {
   const Az = matVec(form.A, z);
   return 0.5 * dot(z, Az) + dot(form.b, z) + form.c;
+}
+
+function gradForm(A: Readonly<DenseMatrix>, b: ReadonlyArray<number>, z: ReadonlyArray<number>): number[] {
+  const Az = matVec(A, z);
+  return z.map((_, i) => (Az[i] ?? 0) + (b[i] ?? 0));
+}
+
+function norm2(v: ReadonlyArray<number>): number {
+  return Math.sqrt(dot(v, v));
+}
+
+function estimateMu(
+  zeta: ReadonlyArray<number>,
+  z: ReadonlyArray<number>,
+  gradQ: ReadonlyArray<number>,
+  qVal: number,
+  sense: ConstraintSense,
+  tol: number
+): number {
+  if (sense === "le" && qVal <= tol) return 0;
+  const denom = Math.max(1e-14, dot(gradQ, gradQ));
+  const numer = -dot(z.map((zi, i) => zi - zeta[i]), gradQ);
+  const mu = numer / denom;
+  if (sense === "le") return Math.max(0, mu);
+  return mu;
+}
+
+function buildKktDiagnostics(args: {
+  zeta: ReadonlyArray<number>;
+  z: ReadonlyArray<number>;
+  A: Readonly<DenseMatrix>;
+  b: ReadonlyArray<number>;
+  c: number;
+  sense: ConstraintSense;
+  tol: number;
+  muHint?: number;
+}): Omit<QCQP1ProjectResult, "z" | "converged" | "iterations"> {
+  const qValue = 0.5 * dot(args.z, matVec(args.A, args.z)) + dot(args.b, args.z) + args.c;
+  const gradQ = gradForm(args.A, args.b, args.z);
+  const mu = args.muHint ?? estimateMu(args.zeta, args.z, gradQ, qValue, args.sense, args.tol);
+
+  const stationarity = args.z.map((zi, i) => zi - args.zeta[i] + mu * gradQ[i]);
+  const stationarityResidual = norm2(stationarity);
+  const primalViolation = args.sense === "eq" ? Math.abs(qValue) : Math.max(0, qValue);
+  const dualResidual = args.sense === "le" ? Math.max(0, -mu) : 0;
+  const complementarityResidual = args.sense === "le" ? Math.abs(mu * qValue) : 0;
+  const kktResidual = Math.max(stationarityResidual, primalViolation, dualResidual, complementarityResidual);
+  const feasible = primalViolation <= args.tol;
+
+  return {
+    qValue,
+    primalViolation,
+    mu,
+    stationarityResidual,
+    dualResidual,
+    complementarityResidual,
+    kktResidual,
+    feasible,
+  };
 }
 
 function symmetrize(A: Readonly<DenseMatrix>): DenseMatrix {
@@ -147,7 +214,21 @@ export function projectQcqp1(
 
   const q0 = evaluateForm({ ...form, A }, zeta);
   if (sense === "le" && q0 <= tol) {
-    return { z: zeta.slice(), converged: true, iterations: 0 };
+    return {
+      z: zeta.slice(),
+      converged: true,
+      iterations: 0,
+      ...buildKktDiagnostics({
+        zeta,
+        z: zeta.slice(),
+        A,
+        b,
+        c,
+        sense,
+        tol,
+        muHint: 0,
+      }),
+    };
   }
 
   let mu = 0;
@@ -158,7 +239,23 @@ export function projectQcqp1(
     if (!cur) break;
     const absPhi = Math.abs(cur.phi);
     if (!best || absPhi < best.absPhi) best = { z: cur.z, absPhi };
-    if (absPhi <= tol) return { z: cur.z, converged: true, iterations: it + 1 };
+    if (absPhi <= tol) {
+      return {
+        z: cur.z,
+        converged: true,
+        iterations: it + 1,
+        ...buildKktDiagnostics({
+          zeta,
+          z: cur.z,
+          A,
+          b,
+          c,
+          sense,
+          tol,
+          muHint: mu,
+        }),
+      };
+    }
 
     const denom = Math.abs(cur.phiPrime) < 1e-14 ? (cur.phiPrime >= 0 ? 1e-14 : -1e-14) : cur.phiPrime;
     let step = -cur.phi / denom;
@@ -182,8 +279,66 @@ export function projectQcqp1(
 
   const zFallback = fallbackPenalty(zeta, A, b, c, fallbackIters, tol);
   const qFallback = evaluateForm({ ...form, A }, zFallback);
-  if (sense === "le" && qFallback <= tol) return { z: zFallback, converged: false, iterations: maxNewtonIters };
-  if (Math.abs(qFallback) <= (opts.tol ?? 1e-8) * 10) return { z: zFallback, converged: false, iterations: maxNewtonIters };
-  if (best) return { z: best.z, converged: false, iterations: maxNewtonIters };
-  return { z: zeta.slice(), converged: false, iterations: maxNewtonIters };
+  if (sense === "le" && qFallback <= tol) {
+    return {
+      z: zFallback,
+      converged: false,
+      iterations: maxNewtonIters,
+      ...buildKktDiagnostics({
+        zeta,
+        z: zFallback,
+        A,
+        b,
+        c,
+        sense,
+        tol,
+      }),
+    };
+  }
+  if (Math.abs(qFallback) <= (opts.tol ?? 1e-8) * 10) {
+    return {
+      z: zFallback,
+      converged: false,
+      iterations: maxNewtonIters,
+      ...buildKktDiagnostics({
+        zeta,
+        z: zFallback,
+        A,
+        b,
+        c,
+        sense,
+        tol,
+      }),
+    };
+  }
+  if (best) {
+    return {
+      z: best.z,
+      converged: false,
+      iterations: maxNewtonIters,
+      ...buildKktDiagnostics({
+        zeta,
+        z: best.z,
+        A,
+        b,
+        c,
+        sense,
+        tol,
+      }),
+    };
+  }
+  return {
+    z: zeta.slice(),
+    converged: false,
+    iterations: maxNewtonIters,
+    ...buildKktDiagnostics({
+      zeta,
+      z: zeta.slice(),
+      A,
+      b,
+      c,
+      sense,
+      tol,
+    }),
+  };
 }

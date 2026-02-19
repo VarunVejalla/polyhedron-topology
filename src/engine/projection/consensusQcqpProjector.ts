@@ -15,16 +15,19 @@ export class ConsensusQcqpProjector implements IProjector {
   private params: ProjectorParams;
   private readonly solver: SequentialQuadraticConsensusSolver;
   private positionsCache: Vec3[];
+  private readonly recombineMode: "closed_form" | "sequential";
 
   constructor(
     facesArg: number[][],
     x0: Vec3[],
     flavor: ProjectionFlavor,
     params: ProjectorParams,
-    convexEncoding: ConvexEncoding = "slack"
+    convexEncoding: ConvexEncoding = "slack",
+    recombineMode: "closed_form" | "sequential" = "closed_form"
   ) {
     this.flavor = flavor;
     this.convexEncoding = convexEncoding;
+    this.recombineMode = recombineMode;
     this.layout = createPolyQcqpLayout(facesArg, x0);
     this.baseline = cloneVec3List(x0);
     this.params = { ...params };
@@ -51,6 +54,14 @@ export class ConsensusQcqpProjector implements IProjector {
       linearSolveShift: 1e-8,
       qcqpTol: 1e-7,
       qcqpMaxNewtonIters: 20,
+      qcqpFeasTol: 1e-6,
+      qcqpKktTol: 1e-5,
+      logQcqpFailures: true,
+      throwOnQcqpFailure: true,
+      recombineMode: this.recombineMode,
+      sequentialPasses: 1,
+      sequentialLocalStep: 0.35,
+      sequentialObjectiveStep: 2e-4,
       relinearizeEvery: 4,
       innerIterationsPerOuter: 1,
     };

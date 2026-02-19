@@ -10,7 +10,10 @@ export type ProjectionMethod =
   | "guided_alm_convex"
   | "consensus_qcqp_planar"
   | "consensus_qcqp_convex"
-  | "consensus_qcqp_convex_direct";
+  | "consensus_qcqp_convex_direct"
+  | "consensus_qcqp_seq_planar"
+  | "consensus_qcqp_seq_convex"
+  | "consensus_qcqp_seq_convex_direct";
 
 export type ProjectionFlavor = "planar" | "convex";
 
@@ -22,6 +25,9 @@ export const projectionMethods: { id: ProjectionMethod; label: string }[] = [
   { id: "consensus_qcqp_planar", label: "Consensus QCQP (planar model)" },
   { id: "consensus_qcqp_convex", label: "Consensus QCQP (convex model with slacks)" },
   { id: "consensus_qcqp_convex_direct", label: "Consensus QCQP (convex direct inequalities)" },
+  { id: "consensus_qcqp_seq_planar", label: "Consensus QCQP A/B (sequential recombine, planar)" },
+  { id: "consensus_qcqp_seq_convex", label: "Consensus QCQP A/B (sequential recombine, convex slacks)" },
+  { id: "consensus_qcqp_seq_convex_direct", label: "Consensus QCQP A/B (sequential recombine, convex direct)" },
 ];
 
 export type HandleSet = {
@@ -52,6 +58,12 @@ export function createProjector(method: ProjectionMethod, faces: number[][], x0:
   if (method === "consensus_qcqp_planar") return new ConsensusQcqpProjector(faces, x0, "planar", params);
   if (method === "consensus_qcqp_convex") return new ConsensusQcqpProjector(faces, x0, "convex", params, "slack");
   if (method === "consensus_qcqp_convex_direct") return new ConsensusQcqpProjector(faces, x0, "convex", params, "direct_ineq");
+  if (method === "consensus_qcqp_seq_planar")
+    return new ConsensusQcqpProjector(faces, x0, "planar", params, "slack", "sequential");
+  if (method === "consensus_qcqp_seq_convex")
+    return new ConsensusQcqpProjector(faces, x0, "convex", params, "slack", "sequential");
+  if (method === "consensus_qcqp_seq_convex_direct")
+    return new ConsensusQcqpProjector(faces, x0, "convex", params, "direct_ineq", "sequential");
   if (method === "guided_alm_planar") return new GuidedAlmProjector(faces, x0, "planar", params);
   if (method === "guided_alm_convex") return new GuidedAlmProjector(faces, x0, "convex", params);
   return new PlanarProjector(faces, x0, method === "convex" ? "convex" : "planar", params);
