@@ -333,18 +333,18 @@ export class AlmQuadraticSolver {
       }
       for (let i = 0; i < this.dim; i++) this.x[i] = candidate[i];
 
-      const beta = this.params.dualRelaxation;
-      const lambdaBound = this.params.lambdaClip;
+      const beta = 1;//this.params.dualRelaxation;
+      // const lambdaBound = this.params.lambdaClip;
       let primal2 = 0;
       for (let i = 0; i < this.constraints.equalities.length; i++) {
         const v = evalIndexed(this.constraints.equalities[i], this.x).value;
         this.lambdaEq[i] += beta * this.rhoEq[i] * v;
-        this.lambdaEq[i] = Math.max(-lambdaBound, Math.min(lambdaBound, this.lambdaEq[i]));
+        // this.lambdaEq[i] = Math.max(-lambdaBound, Math.min(lambdaBound, this.lambdaEq[i]));
         primal2 += v * v;
       }
       for (let i = 0; i < this.constraints.inequalities.length; i++) {
         const g = evalIndexed(this.constraints.inequalities[i], this.x).value;
-        this.lambdaIneq[i] = Math.max(0, Math.min(lambdaBound, this.lambdaIneq[i] + beta * this.rhoIneq[i] * g));
+        this.lambdaIneq[i] = this.lambdaIneq[i] + beta * this.rhoIneq[i] * g;//Math.max(0, Math.min(lambdaBound, this.lambdaIneq[i] + beta * this.rhoIneq[i] * g));
         const gp = Math.max(0, g);
         primal2 += gp * gp;
       }
