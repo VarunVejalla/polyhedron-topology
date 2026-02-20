@@ -1,4 +1,3 @@
-/* eslint-disable import/no-unused-modules */
 import type { Vec3 } from "../math/types";
 import { v3 } from "../math/vec3";
 import { buildPolyState } from "../poly";
@@ -45,6 +44,10 @@ type MetricBuilder = (args: {
   idxVertex: (vi: number) => number;
 }) => QuadraticForm;
 
+type PolyQcqpBuildOptions = {
+  includeNondegeneracy?: boolean;
+};
+
 type PolyQcqpLayout = {
   faces: number[][];
   topology: ReturnType<typeof buildPolyTopology>;
@@ -60,7 +63,8 @@ type PolyQcqpLayout = {
   buildModel: (
     flavor: ProjectionFlavor,
     convexEncoding: ConvexEncoding,
-    metricBuilder: MetricBuilder
+    metricBuilder: MetricBuilder,
+    options?: PolyQcqpBuildOptions
   ) => OptimizationModel;
   planarityViolation: (vertices: ReadonlyArray<Vec3>) => number;
 };
@@ -123,6 +127,44 @@ function nonIncIneqConstraint(layout: PolyQcqpLayout, fi: number, vi: number): I
   const b = new Array<number>(7).fill(0);
   b[3] = -1;
   return { id: `noninc_ineq:${fi}:${vi}`, sense: "le", form: { indices, A, b, c: 0 } };
+}
+
+function meanCoordinateConstraint(layout: PolyQcqpLayout, axis: 0 | 1 | 2): IndexedQuadraticConstraint {
+  const indices = new Array<number>(layout.vertexCount);
+  const b = new Array<number>(layout.vertexCount).fill(1);
+  for (let vi = 0; vi < layout.vertexCount; vi++) indices[vi] = layout.idxVertex(vi) + axis;
+  return {
+    id: `mean:${axis}`,
+    sense: "eq",
+    form: {
+      indices,
+      A: zeroMat(layout.vertexCount),
+      b,
+      c: 0,
+    },
+  };
+}
+
+function vertexNormConstraint(layout: PolyQcqpLayout): IndexedQuadraticConstraint {
+  const indices = new Array<number>(3 * layout.vertexCount);
+  for (let vi = 0; vi < layout.vertexCount; vi++) {
+    const b = layout.idxVertex(vi);
+    indices[3 * vi] = b;
+    indices[3 * vi + 1] = b + 1;
+    indices[3 * vi + 2] = b + 2;
+  }
+  const A = zeroMat(indices.length);
+  for (let i = 0; i < indices.length; i++) A[i][i] = 2;
+  return {
+    id: "vertex_norm",
+    sense: "eq",
+    form: {
+      indices,
+      A,
+      b: new Array<number>(indices.length).fill(0),
+      c: -layout.vertexCount,
+    },
+  };
 }
 
 export function createPolyQcqpLayout(facesArg: number[][], x0: ReadonlyArray<Vec3>): PolyQcqpLayout {
@@ -188,14 +230,22 @@ export function createPolyQcqpLayout(facesArg: number[][], x0: ReadonlyArray<Vec
   const buildModel = (
     flavor: ProjectionFlavor,
     convexEncoding: ConvexEncoding,
-    metricBuilder: MetricBuilder
+    metricBuilder: MetricBuilder,
+    options?: PolyQcqpBuildOptions
   ): OptimizationModel => {
+    const includeNondegeneracy = options?.includeNondegeneracy ?? true;
     const indexed: IndexedQuadraticConstraintSet = { equalities: [], inequalities: [] };
     for (let i = 0; i < topology.incidencePairs.length; i++) {
       const pair = topology.incidencePairs[i];
       indexed.equalities.push(incidenceConstraint(layout, pair.fi, pair.vi));
     }
     for (let fi = 0; fi < faceCount; fi++) indexed.equalities.push(unitNormalConstraint(layout, fi));
+    if (includeNondegeneracy) {
+      indexed.equalities.push(meanCoordinateConstraint(layout, 0));
+      indexed.equalities.push(meanCoordinateConstraint(layout, 1));
+      indexed.equalities.push(meanCoordinateConstraint(layout, 2));
+      indexed.equalities.push(vertexNormConstraint(layout));
+    }
 
     if (flavor === "convex") {
       if (convexEncoding === "slack") {

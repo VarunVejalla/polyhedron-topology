@@ -13,8 +13,8 @@ export type ProjectionFlavor = "planar" | "convex";
 export const projectionMethods: { id: ProjectionMethod; label: string }[] = [
   { id: "planar", label: "Planar projection" },
   { id: "convex", label: "Planar + convex projection" },
-  { id: "guided_alm_planar", label: "Guided ALM (planar model)" },
-  { id: "guided_alm_convex", label: "Guided ALM (convex model with slacks)" },
+  { id: "guided_alm_planar", label: "Guided ALM (quadratic planar)" },
+  { id: "guided_alm_convex", label: "Guided ALM (quadratic convex direct)" },
 ];
 
 export type HandleSet = {
