@@ -329,6 +329,6 @@ export function buildHandleMetricQuadratic(args: {
     c += w * (target[0] * target[0] + target[1] * target[1] + target[2] * target[2]);
   }
 
-  for (let i = 3 * args.vertexCount; i < args.dim; i++) A[i][i] += 2e-6;
+  for (let i = 3 * args.vertexCount; i < args.dim; i++) A[i][i] += 1e-3;
   return { A, b, c };
 }
