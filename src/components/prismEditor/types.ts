@@ -46,6 +46,7 @@ export type ThreeSceneAPI = {
   vMeshes: THREE.Mesh[];
   mesh: THREE.Mesh;
   triToFace: number[];
+  faces: number[][];
 
   setMouseFromEvent: (e: PointerEvent) => void;
   computeFaceNormalAndPoint: (

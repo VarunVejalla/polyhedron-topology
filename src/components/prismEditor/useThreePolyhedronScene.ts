@@ -524,6 +524,7 @@ export function useThreePolyhedronScene(
       vMeshes,
       mesh,
       triToFace,
+      faces: facesForTopology,
       setMouseFromEvent,
       computeFaceNormalAndPoint,
       syncSceneFromX,

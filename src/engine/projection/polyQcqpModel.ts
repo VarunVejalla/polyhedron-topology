@@ -1,3 +1,4 @@
+/* eslint-disable import/no-unused-modules */
 import type { Vec3 } from "../math/types";
 import { v3 } from "../math/vec3";
 import { buildPolyState } from "../poly";

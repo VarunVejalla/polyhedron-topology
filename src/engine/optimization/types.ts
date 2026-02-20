@@ -26,7 +26,7 @@ export type QuadraticConstraint = {
   form: QuadraticForm;
 };
 
-export type IndexedQuadraticForm = {
+type IndexedQuadraticForm = {
   // Global variable indices touched by this quadratic.
   indices: number[];
   // Local quadratic over the selected indices.

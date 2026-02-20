@@ -189,7 +189,7 @@ export function usePolyhedronInteraction(
         applyProjection(batch);
         it += batch;
 
-        if (mode === "tol" && stateRef.current.controller.diagnostics().totalPlanarityViolation <= tol) {
+        if (mode === "tol" && stateRef.current.controller.getDerivedCache().planarityMetric <= tol) {
           cancelRunTimer();
           commit(false);
           setRunning(false);
