@@ -154,7 +154,7 @@ const kernel: OptimizerKernel<PlanarState, ProjectorParams, PlanarMemory, Planar
     const wFree = Math.max(0, params.wFree);
     const wHandle = Math.max(0, params.wHandle);
     const convexPasses = Math.max(1, model.flavor === "convex" ? Math.floor(params.itersPerFrame) : 1);
-    const convexEps = CONVEX_HALFSPACE_EPS;
+    const convexEps = Math.max(0, params.convexHalfspaceEps ?? CONVEX_HALFSPACE_EPS);
 
     for (let it = 0; it < iterations; it++) {
       for (let vi = 0; vi < state.positions.length; vi++) {

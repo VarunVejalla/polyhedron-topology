@@ -37,6 +37,16 @@ export type ProjectorParams = {
   wHandle: number;
   itersPerFrame: number;
   itersOnRelease: number;
+  qcqpDamping?: number;
+  almProximalWeight?: number;
+  almActiveSetEps?: number;
+  almMaxStepNorm?: number;
+  almMinStepScale?: number;
+  almMaxBacktracks?: number;
+  almDualRelaxation?: number;
+  almLambdaClip?: number;
+  convexHalfspaceEps?: number;
+  legacyStepCapRatio?: number;
 };
 
 export interface IProjector {

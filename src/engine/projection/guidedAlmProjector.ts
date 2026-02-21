@@ -57,8 +57,13 @@ export class GuidedAlmProjector implements IProjector {
       model: this.model,
       initialX: this.layout.packState(this.positions, this.flavor, this.convexEncoding),
       rho: params.rho,
-      proximalWeight: PROXIMAL_WEIGHT_DEFAULT,
-      activeSetEps: ACTIVE_SET_EPS,
+      proximalWeight: params.almProximalWeight ?? PROXIMAL_WEIGHT_DEFAULT,
+      activeSetEps: params.almActiveSetEps ?? ACTIVE_SET_EPS,
+      maxStepNorm: params.almMaxStepNorm,
+      minStepScale: params.almMinStepScale,
+      maxBacktracks: params.almMaxBacktracks,
+      dualRelaxation: params.almDualRelaxation,
+      lambdaClip: params.almLambdaClip,
     });
   }
 
@@ -79,7 +84,16 @@ export class GuidedAlmProjector implements IProjector {
 
   setParams(next: Partial<ProjectorParams>): void {
     this.params = { ...this.params, ...next };
-    this.solver.setParams({ rho: Math.max(MIN_RHO, this.params.rho) });
+    this.solver.setParams({
+      rho: Math.max(MIN_RHO, this.params.rho),
+      proximalWeight: this.params.almProximalWeight,
+      activeSetEps: this.params.almActiveSetEps,
+      maxStepNorm: this.params.almMaxStepNorm,
+      minStepScale: this.params.almMinStepScale,
+      maxBacktracks: this.params.almMaxBacktracks,
+      dualRelaxation: this.params.almDualRelaxation,
+      lambdaClip: this.params.almLambdaClip,
+    });
   }
 
   step(iterations: number): void {

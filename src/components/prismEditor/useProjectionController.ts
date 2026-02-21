@@ -56,13 +56,7 @@ export function useProjectionController(
 
   useEffect(() => {
     paramsRef.current = { ...params };
-    projectorRef.current?.setParams?.({
-      rho: params.rho,
-      wFree: params.wFree,
-      wHandle: params.wHandle,
-      itersPerFrame: params.itersPerFrame,
-      itersOnRelease: params.itersOnRelease,
-    });
+    projectorRef.current?.setParams?.({ ...params });
   }, [params]);
 
   useEffect(() => {

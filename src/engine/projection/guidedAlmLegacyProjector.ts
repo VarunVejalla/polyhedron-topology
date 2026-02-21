@@ -173,8 +173,9 @@ export class GuidedAlmLegacyProjector implements IProjector {
     const wFree = Math.max(0, this.params.wFree);
     const wHandle = Math.max(0, this.params.wHandle);
     const convexPasses = this.flavor === "convex" ? 1 : 0;
-    const convexEps = CONVEX_HALFSPACE_EPS;
-    const stepCap = LEGACY_STEP_CAP_RATIO * bboxScale(this.positions);
+    const convexEps = Math.max(0, this.params.convexHalfspaceEps ?? CONVEX_HALFSPACE_EPS);
+    const stepCapRatio = Math.max(EPS, this.params.legacyStepCapRatio ?? LEGACY_STEP_CAP_RATIO);
+    const stepCap = stepCapRatio * bboxScale(this.positions);
 
     for (let it = 0; it < iterations; it++) {
       for (let vi = 0; vi < this.positions.length; vi++) {

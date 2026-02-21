@@ -57,7 +57,7 @@ export class ConsensusQcqpProjector implements IProjector {
       model: this.model,
       initialX: this.layout.packState(this.positions, this.flavor, this.convexEncoding),
       rho: params.rho,
-      damping: DEFAULT_DAMPING,
+      damping: params.qcqpDamping ?? DEFAULT_DAMPING,
     });
   }
 
@@ -78,7 +78,10 @@ export class ConsensusQcqpProjector implements IProjector {
 
   setParams(next: Partial<ProjectorParams>): void {
     this.params = { ...this.params, ...next };
-    this.solver.setParams({ rho: Math.max(MIN_RHO, this.params.rho) });
+    this.solver.setParams({
+      rho: Math.max(MIN_RHO, this.params.rho),
+      damping: this.params.qcqpDamping,
+    });
   }
 
   step(iterations: number): void {

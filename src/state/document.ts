@@ -3,8 +3,8 @@ import { cloneGraph } from "../graph/core";
 import { buildVertexPresetGraph, presetNames } from "../graph/presets";
 import { GRAPH_VIEW } from "../graph/view";
 import { makeDefaultPrism, PRISM_FACES, type Vec3 } from "../engine/prismTopology";
-import type { ProjectionMethod } from "../engine/projection";
 import { deriveDualPairFromVertexGraph } from "../graph/pipeline";
+import { createDefaultProjectionSettings, type ProjectionSettings } from "./projectionSettings";
 
 type PolyDocument = {
   vertices: Vec3[];
@@ -24,19 +24,10 @@ type UIState = {
   showStability: boolean;
   showBasins: boolean;
   showAdvancedSettings: boolean;
+  showAdvancedProjectionParams: boolean;
 };
 
-type ProjectionState = {
-  method: ProjectionMethod;
-  rho: number;
-  wFree: number;
-  wHandle: number;
-  itersPerFrame: number;
-  itersOnRelease: number;
-  hardProjectMode: "iters" | "tol";
-  hardProjectMaxIters: number;
-  hardProjectTolPlanar: number;
-};
+type ProjectionState = ProjectionSettings;
 
 type Document = {
   preset: string;
@@ -110,17 +101,7 @@ export function createInitialState(): DocumentState {
     vertexGraph: pair?.vertexGraph ?? initialVertexGraph,
     faceGraph: pair?.faceGraph ?? initialVertexGraph,
     poly: { vertices: initialPoly.vertices, faces: PRISM_FACES },
-    projection: {
-      method: "planar",
-      rho: 10,
-      wFree: 1,
-      wHandle: 1e5,
-      itersPerFrame: 10,
-      itersOnRelease: 120,
-      hardProjectMode: "iters",
-      hardProjectMaxIters: 400,
-      hardProjectTolPlanar: 1e-6,
-    },
+    projection: createDefaultProjectionSettings(),
     ui: {
       leftWidth: 460,
       showGraphs: true,
@@ -134,6 +115,7 @@ export function createInitialState(): DocumentState {
       showStability: false,
       showBasins: false,
       showAdvancedSettings: false,
+      showAdvancedProjectionParams: false,
     },
   };
 

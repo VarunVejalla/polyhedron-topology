@@ -3,14 +3,14 @@ import "./App.css";
 
 import { PrismEditor, type PrismEditorHandle } from "./components/PrismEditor";
 import { GraphEditor } from "./components/GraphEditor";
-
-import { projectionMethods, type ProjectionMethod } from "./engine/projection";
+import { ProjectionSettingsPanel } from "./components/ProjectionSettingsPanel";
 
 import { presetNames } from "./graph/presets";
 import { derivePolyFromFaceGraph, derivePolyFromVertexGraph } from "./graph/pipeline";
 import { GRAPH_VIEW } from "./graph/view";
 
 import { createInitialState, documentReducer } from "./state/document";
+import { toProjectorParams } from "./state/projectionSettings";
 
 export default function App() {
   const presetList = useMemo(() => presetNames(), []);
@@ -218,110 +218,12 @@ export default function App() {
       </div>
 
       {doc.ui.showAdvancedSettings && (
-        <div className="settingsPanel">
-          <div className="settingsGrid">
-            <label className="toolbarField">
-              Method
-              <select
-                value={doc.projection.method}
-                onChange={(e) =>
-                  dispatch({
-                    type: "SET_PROJECTION",
-                    patch: { method: e.target.value as ProjectionMethod },
-                  })
-                }
-              >
-                {projectionMethods.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="toolbarField">
-              rho
-              <input type="number" value={doc.projection.rho} onChange={(e) => dispatch({ type: "SET_PROJECTION", patch: { rho: Number(e.target.value) } })} />
-            </label>
-
-            <label className="toolbarField">
-              wFree
-              <input type="number" value={doc.projection.wFree} onChange={(e) => dispatch({ type: "SET_PROJECTION", patch: { wFree: Number(e.target.value) } })} />
-            </label>
-
-            <label className="toolbarField">
-              wHandle
-              <input type="number" value={doc.projection.wHandle} onChange={(e) => dispatch({ type: "SET_PROJECTION", patch: { wHandle: Number(e.target.value) } })} />
-            </label>
-
-            <label className="toolbarField">
-              iters/frame
-              <input
-                type="number"
-                value={doc.projection.itersPerFrame}
-                onChange={(e) => dispatch({ type: "SET_PROJECTION", patch: { itersPerFrame: Number(e.target.value) } })}
-              />
-            </label>
-
-            <label className="toolbarField">
-              iters/release
-              <input
-                type="number"
-                value={doc.projection.itersOnRelease}
-                onChange={(e) => dispatch({ type: "SET_PROJECTION", patch: { itersOnRelease: Number(e.target.value) } })}
-              />
-            </label>
-
-            <label className="toolbarField">
-              hard project mode
-              <select
-                value={doc.projection.hardProjectMode}
-                onChange={(e) =>
-                  dispatch({
-                    type: "SET_PROJECTION",
-                    patch: { hardProjectMode: e.target.value as "iters" | "tol" },
-                  })
-                }
-              >
-                <option value="iters">fixed iterations</option>
-                <option value="tol">until tolerance</option>
-              </select>
-            </label>
-
-            <label className="toolbarField">
-              hard project max iters
-              <input
-                type="number"
-                min={1}
-                step={1}
-                value={doc.projection.hardProjectMaxIters}
-                onChange={(e) =>
-                  dispatch({
-                    type: "SET_PROJECTION",
-                    patch: { hardProjectMaxIters: Math.max(1, Number(e.target.value)) },
-                  })
-                }
-              />
-            </label>
-
-            <label className="toolbarField">
-              hard project tolerance
-              <input
-                type="number"
-                min={0}
-                step="any"
-                value={doc.projection.hardProjectTolPlanar}
-                onChange={(e) =>
-                  dispatch({
-                    type: "SET_PROJECTION",
-                    patch: { hardProjectTolPlanar: Math.max(0, Number(e.target.value)) },
-                  })
-                }
-              />
-            </label>
-
-          </div>
-        </div>
+        <ProjectionSettingsPanel
+          value={doc.projection}
+          showAdvanced={doc.ui.showAdvancedProjectionParams}
+          onPatch={(patch) => dispatch({ type: "SET_PROJECTION", patch })}
+          onShowAdvancedChange={(next) => dispatch({ type: "SET_UI", patch: { showAdvancedProjectionParams: next } })}
+        />
       )}
 
       <div className="mainRow" ref={mainRowRef}>
@@ -357,13 +259,7 @@ export default function App() {
               initialVertices={doc.poly.vertices}
               faces={doc.poly.faces}
               method={doc.projection.method}
-              params={{
-                rho: doc.projection.rho,
-                wFree: doc.projection.wFree,
-                wHandle: doc.projection.wHandle,
-                itersPerFrame: doc.projection.itersPerFrame,
-                itersOnRelease: doc.projection.itersOnRelease,
-              }}
+              params={toProjectorParams(doc.projection)}
               hardProject={{
                 mode: doc.projection.hardProjectMode,
                 maxIters: doc.projection.hardProjectMaxIters,

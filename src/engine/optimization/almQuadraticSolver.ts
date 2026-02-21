@@ -204,6 +204,11 @@ export class AlmQuadraticSolver {
     rho: number;
     proximalWeight?: number;
     activeSetEps?: number;
+    maxStepNorm?: number;
+    minStepScale?: number;
+    maxBacktracks?: number;
+    dualRelaxation?: number;
+    lambdaClip?: number;
   }) {
     this.model = args.model;
     this.dim = args.initialX.length;
@@ -217,11 +222,11 @@ export class AlmQuadraticSolver {
       rho: Math.max(MIN_RHO, args.rho),
       proximalWeight: Math.max(0, args.proximalWeight ?? PROXIMAL_WEIGHT_DEFAULT),
       activeSetEps: Math.max(0, args.activeSetEps ?? ACTIVE_SET_EPS),
-      maxStepNorm: ALM_MAX_STEP_NORM,
-      minStepScale: ALM_MIN_STEP_SCALE,
-      maxBacktracks: ALM_MAX_BACKTRACKS,
-      dualRelaxation: ALM_DUAL_RELAXATION,
-      lambdaClip: ALM_LAMBDA_CLIP,
+      maxStepNorm: Math.max(MIN_RHO, args.maxStepNorm ?? ALM_MAX_STEP_NORM),
+      minStepScale: Math.min(1, Math.max(MIN_RHO, args.minStepScale ?? ALM_MIN_STEP_SCALE)),
+      maxBacktracks: Math.max(0, Math.floor(args.maxBacktracks ?? ALM_MAX_BACKTRACKS)),
+      dualRelaxation: Math.min(1, Math.max(MIN_RHO, args.dualRelaxation ?? ALM_DUAL_RELAXATION)),
+      lambdaClip: Math.max(1, args.lambdaClip ?? ALM_LAMBDA_CLIP),
     };
   }
 
