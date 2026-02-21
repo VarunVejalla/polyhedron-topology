@@ -25,6 +25,7 @@ type UIState = {
   showBasins: boolean;
   showAdvancedSettings: boolean;
   showAdvancedProjectionParams: boolean;
+  showGraphicalSettings: boolean;
 };
 
 type ProjectionState = ProjectionSettings;
@@ -116,6 +117,7 @@ export function createInitialState(): DocumentState {
       showBasins: false,
       showAdvancedSettings: false,
       showAdvancedProjectionParams: false,
+      showGraphicalSettings: false,
     },
   };
 

@@ -23,9 +23,7 @@ export default function App() {
   const [isConvexNow, setIsConvexNow] = useState(true);
   const [handleCount, setHandleCount] = useState(0);
   const [isComputing, setIsComputing] = useState(false);
-  const [threeOnlyHeight, setThreeOnlyHeight] = useState<number | null>(null);
   const prismRef = useRef<PrismEditorHandle | null>(null);
-  const mainRowRef = useRef<HTMLDivElement | null>(null);
 
   const undo = () => dispatch({ type: "UNDO" });
   const redo = () => dispatch({ type: "REDO" });
@@ -67,23 +65,6 @@ export default function App() {
     window.addEventListener("resize", clampLeftPane);
     return () => window.removeEventListener("resize", clampLeftPane);
   }, [doc.ui.showGraphs, doc.ui.show3D, doc.ui.leftWidth]);
-
-  useEffect(() => {
-    const updateThreeOnlyHeight = () => {
-      const node = mainRowRef.current;
-      if (!node) return;
-      if (!(doc.ui.show3D && !doc.ui.showGraphs)) {
-        setThreeOnlyHeight(null);
-        return;
-      }
-      const top = node.getBoundingClientRect().top;
-      const h = Math.max(320, window.innerHeight - top - 10);
-      setThreeOnlyHeight(h);
-    };
-    updateThreeOnlyHeight();
-    window.addEventListener("resize", updateThreeOnlyHeight);
-    return () => window.removeEventListener("resize", updateThreeOnlyHeight);
-  }, [doc.ui.show3D, doc.ui.showGraphs, doc.ui.showAdvancedSettings]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -201,12 +182,22 @@ export default function App() {
         </div>
 
         <div className="toolbarSection toolbarSectionRight">
+          <button className="uiButton" onClick={() => prismRef.current?.hardProject()} disabled={isComputing}>
+            Hard project
+          </button>
           <div className="statusPill">Planarity: {planarity.toExponential(2)}</div>
           <div className="statusPill">Normality: {unitNormality.toExponential(2)}</div>
           <div className="statusPill">Convexity: {convexityViolation.toExponential(2)}</div>
           <div className={`statusPill ${isConvexNow ? "" : "statusBusy"}`}>{isConvexNow ? "Convex" : "Non-convex"}</div>
           <div className="statusPill">Handles: {handleCount}</div>
           <div className={`statusPill ${isComputing ? "statusBusy" : ""}`}>{isComputing ? "Running" : "Idle"}</div>
+          <button
+            className="uiButton"
+            onClick={() => dispatch({ type: "SET_UI", patch: { showGraphicalSettings: !doc.ui.showGraphicalSettings } })}
+            aria-expanded={doc.ui.showGraphicalSettings}
+          >
+            {doc.ui.showGraphicalSettings ? "Hide graphical" : "Graphical settings"}
+          </button>
           <button
             className="uiButton"
             onClick={() => dispatch({ type: "SET_UI", patch: { showAdvancedSettings: !doc.ui.showAdvancedSettings } })}
@@ -226,7 +217,41 @@ export default function App() {
         />
       )}
 
-      <div className="mainRow" ref={mainRowRef}>
+      {doc.ui.showGraphicalSettings && (
+        <div className="settingsPanel">
+          <div className="settingsDropdown">
+            <div className="settingsSectionTitle">Graphical settings</div>
+            <div className="settingsButtonGrid">
+              <button className={`uiButton ${doc.ui.showVertexPositions ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showVertexPositions")} disabled={isComputing}>
+                Vertex positions
+              </button>
+              <button className={`uiButton ${doc.ui.showAxes ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showAxes")} disabled={isComputing}>
+                Axes
+              </button>
+              <button className={`uiButton ${doc.ui.showGrid ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showGrid")} disabled={isComputing}>
+                Grid
+              </button>
+              <button className={`uiButton ${doc.ui.showNormals ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showNormals")} disabled={isComputing}>
+                Normals
+              </button>
+              <button className={`uiButton ${doc.ui.showCom ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showCom")} disabled={isComputing}>
+                COM
+              </button>
+              <button className={`uiButton ${doc.ui.showProjections ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showProjections")} disabled={isComputing}>
+                COM proj
+              </button>
+              <button className={`uiButton ${doc.ui.showStability ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showStability")} disabled={isComputing}>
+                Stability
+              </button>
+              <button className={`uiButton ${doc.ui.showBasins ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showBasins")} disabled={isComputing}>
+                Basins
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="mainRow">
         {doc.ui.showGraphs && (
           <div className="leftPane" style={{ width: doc.ui.leftWidth }}>
             <GraphEditor
@@ -253,7 +278,7 @@ export default function App() {
         )}
 
         {doc.ui.show3D && (
-          <div className="rightPane" style={doc.ui.show3D && !doc.ui.showGraphs && threeOnlyHeight ? { height: `${threeOnlyHeight}px` } : undefined}>
+          <div className="rightPane">
             <PrismEditor
               ref={prismRef}
               initialVertices={doc.poly.vertices}
@@ -298,34 +323,6 @@ export default function App() {
               </button>
               <button className="uiButton" onClick={() => prismRef.current?.clearAllHandles()} disabled={isComputing}>
                 Clear handles
-              </button>
-              <button className="uiButton" onClick={() => prismRef.current?.hardProject()} disabled={isComputing}>
-                Hard project
-              </button>
-              <button className={`uiButton ${doc.ui.showAxes ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showAxes")} disabled={isComputing}>
-                Axes
-              </button>
-              <button className={`uiButton ${doc.ui.showGrid ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showGrid")} disabled={isComputing}>
-                Grid
-              </button>
-              <button className={`uiButton ${doc.ui.showNormals ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showNormals")} disabled={isComputing}>
-                Normals
-              </button>
-              <button className={`uiButton ${doc.ui.showCom ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showCom")} disabled={isComputing}>
-                COM
-              </button>
-              <button
-                className={`uiButton ${doc.ui.showProjections ? "uiButtonActive" : ""}`}
-                onClick={() => toggleViewFlag("showProjections")}
-                disabled={isComputing}
-              >
-                COM proj
-              </button>
-              <button className={`uiButton ${doc.ui.showStability ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showStability")} disabled={isComputing}>
-                Stability
-              </button>
-              <button className={`uiButton ${doc.ui.showBasins ? "uiButtonActive" : ""}`} onClick={() => toggleViewFlag("showBasins")} disabled={isComputing}>
-                Basins
               </button>
             </div>
 
