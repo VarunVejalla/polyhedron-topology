@@ -1,4 +1,13 @@
 import type { ConstraintSense, DenseMatrix } from "./types";
+import {
+  QCQP_BISECTION_ITERS,
+  QCQP_BRACKET_EXPANSIONS,
+  QCQP_DENOM_EPS,
+  QCQP_EIG_TOL,
+  QCQP_ROOT_EPS,
+  QCQP_ROOT_WIDTH_EPS,
+  SOLVER_PIVOT_EPS,
+} from "../math/constants";
 
 export type Qcqp1Constraint = {
   sense: ConstraintSense;
@@ -65,7 +74,7 @@ function jacobiEigenSymmetric(Ain: ReadonlyArray<ReadonlyArray<number>>): { valu
   const A = symmetrize(Ain);
   const Q = identity(n);
   const maxSweeps = Math.max(20, 8 * n * n);
-  const tol = 1e-12;
+  const tol = QCQP_EIG_TOL;
 
   for (let sweep = 0; sweep < maxSweeps; sweep++) {
     let p = 0;
@@ -137,7 +146,7 @@ function solveEquality(zeta: ReadonlyArray<number>, c: Qcqp1Constraint): Qcqp1Re
     let out = -c.c;
     for (let k = 0; k < lam.length; k++) {
       const denom = 1 + mu * lam[k];
-      if (Math.abs(denom) < 1e-14) return Number.NaN;
+      if (Math.abs(denom) < QCQP_DENOM_EPS) return Number.NaN;
       const zk = (zetaP[k] + mu * bP[k]) / denom;
       out += lam[k] * zk * zk - 2 * bP[k] * zk;
     }
@@ -148,16 +157,16 @@ function solveEquality(zeta: ReadonlyArray<number>, c: Qcqp1Constraint): Qcqp1Re
   let upper = Infinity;
   for (let k = 0; k < lam.length; k++) {
     const lk = lam[k];
-    if (lk > 1e-14) lower = Math.max(lower, -1 / lk);
-    if (lk < -1e-14) upper = Math.min(upper, -1 / lk);
+    if (lk > SOLVER_PIVOT_EPS) lower = Math.max(lower, -1 / lk);
+    if (lk < -SOLVER_PIVOT_EPS) upper = Math.min(upper, -1 / lk);
   }
-  const eps = 1e-10;
+  const eps = QCQP_ROOT_EPS;
   let lo = Number.isFinite(lower) ? lower + eps : -1;
   let hi = Number.isFinite(upper) ? upper - eps : 1;
 
   let flo = phi(lo);
   let fhi = phi(hi);
-  for (let expand = 0; expand < 64 && (!Number.isFinite(flo) || !Number.isFinite(fhi) || flo * fhi > 0); expand++) {
+  for (let expand = 0; expand < QCQP_BRACKET_EXPANSIONS && (!Number.isFinite(flo) || !Number.isFinite(fhi) || flo * fhi > 0); expand++) {
     if (!Number.isFinite(lower)) lo *= 2;
     if (!Number.isFinite(upper)) hi *= 2;
     flo = phi(lo);
@@ -173,14 +182,14 @@ function solveEquality(zeta: ReadonlyArray<number>, c: Qcqp1Constraint): Qcqp1Re
   let fb = fhi;
   let mu = 0.5 * (a + b);
   let converged = false;
-  for (let it = 0; it < 128; it++) {
+  for (let it = 0; it < QCQP_BISECTION_ITERS; it++) {
     mu = 0.5 * (a + b);
     const fm = phi(mu);
     if (!Number.isFinite(fm)) {
       converged = false;
       break;
     }
-    if (Math.abs(fm) < 1e-10 || Math.abs(b - a) < 1e-12) {
+    if (Math.abs(fm) < QCQP_ROOT_EPS || Math.abs(b - a) < QCQP_ROOT_WIDTH_EPS) {
       converged = true;
       break;
     }
@@ -197,7 +206,7 @@ function solveEquality(zeta: ReadonlyArray<number>, c: Qcqp1Constraint): Qcqp1Re
   const zP = new Array<number>(lam.length);
   for (let k = 0; k < lam.length; k++) {
     const denom = 1 + mu * lam[k];
-    if (Math.abs(denom) < 1e-14) return { z: [...zeta], converged: false };
+    if (Math.abs(denom) < QCQP_DENOM_EPS) return { z: [...zeta], converged: false };
     zP[k] = (zetaP[k] + mu * bP[k]) / denom;
   }
   const z = mulMatVec(eig.Q, zP);
@@ -205,6 +214,6 @@ function solveEquality(zeta: ReadonlyArray<number>, c: Qcqp1Constraint): Qcqp1Re
 }
 
 export function projectQcqp1Paper(zeta: ReadonlyArray<number>, constraint: Qcqp1Constraint): Qcqp1Result {
-  if (constraint.sense === "le" && evalConstraint(constraint, zeta) <= 1e-10) return { z: [...zeta], converged: true };
+  if (constraint.sense === "le" && evalConstraint(constraint, zeta) <= QCQP_ROOT_EPS) return { z: [...zeta], converged: true };
   return solveEquality(zeta, constraint);
 }

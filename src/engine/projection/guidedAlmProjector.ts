@@ -1,4 +1,5 @@
 import type { Vec3 } from "../math/types";
+import { ACTIVE_SET_EPS, MIN_RHO, PROXIMAL_WEIGHT_DEFAULT } from "../math/constants";
 import { AlmQuadraticSolver } from "../optimization/almQuadraticSolver";
 import type { OptimizationModel } from "../optimization/types";
 import {
@@ -56,8 +57,8 @@ export class GuidedAlmProjector implements IProjector {
       model: this.model,
       initialX: this.layout.packState(this.positions, this.flavor, this.convexEncoding),
       rho: params.rho,
-      proximalWeight: 1e-6,
-      activeSetEps: 1e-10,
+      proximalWeight: PROXIMAL_WEIGHT_DEFAULT,
+      activeSetEps: ACTIVE_SET_EPS,
     });
   }
 
@@ -78,7 +79,7 @@ export class GuidedAlmProjector implements IProjector {
 
   setParams(next: Partial<ProjectorParams>): void {
     this.params = { ...this.params, ...next };
-    this.solver.setParams({ rho: Math.max(1e-8, this.params.rho) });
+    this.solver.setParams({ rho: Math.max(MIN_RHO, this.params.rho) });
   }
 
   step(iterations: number): void {

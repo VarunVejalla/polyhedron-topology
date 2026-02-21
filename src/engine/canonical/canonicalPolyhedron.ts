@@ -1,7 +1,7 @@
 import type { SimpleGraph, NodeId } from "../../graph/types";
 import type { Vec3 } from "../math/types";
 import { v3 } from "../math/vec3";
-import { EPS_AREA } from "../math/constants";
+import { CANONICAL_2D_SCALE_EPS, CANONICAL_TOL_DEFAULT, EPS, EPS_AREA } from "../math/constants";
 import { bestFitPlanePCA, planarityResiduals, projectPointToPlane } from "../math/plane";
 
 
@@ -55,7 +55,7 @@ function closestPointToOriginOnSegment(a: Vec3, b: Vec3): { x: Vec3; t: number }
  */
 export function buildCanonicalPolyhedron(input: CanonicalBuildInput, options: CanonicalBuildOptions = {}): CanonicalBuildResult {
   const maxIters = options.maxIters ?? 400;
-  const tol = options.tol ?? 1e-7;
+  const tol = options.tol ?? CANONICAL_TOL_DEFAULT;
   const edgeStep = options.edgeStep ?? 0.05;
   const planeBlend = options.planeBlend ?? 1.0;
   const initialScale = options.initialScale ?? 2.3;
@@ -91,7 +91,7 @@ export function buildCanonicalPolyhedron(input: CanonicalBuildInput, options: Ca
     const dy = n.y - cy;
     maxR = Math.max(maxR, Math.sqrt(dx * dx + dy * dy));
   }
-  const scale2D = maxR > 1e-9 ? (1 / maxR) : 1;
+  const scale2D = maxR > CANONICAL_2D_SCALE_EPS ? (1 / maxR) : 1;
   const V: Vec3[] = nodes.map((n) => {
     const u = (n.x - cx) * scale2D;
     const v = (n.y - cy) * scale2D;
@@ -116,14 +116,14 @@ export function buildCanonicalPolyhedron(input: CanonicalBuildInput, options: Ca
       const b = V[j];
       const { x } = closestPointToOriginOnSegment(a, b);
       const r = v3.norm(x);
-      tangencyPoints.push(r > 1e-12 ? v3.mul(x, 1 / r) : [0, 0, 1]);
+      tangencyPoints.push(r > EPS ? v3.mul(x, 1 / r) : [0, 0, 1]);
 
       const err = 1 - r; // positive if closest point inside unit sphere
       maxEdgeErr = Math.max(maxEdgeErr, Math.abs(err));
 
       if (Math.abs(err) > 0) {
         // push/pull along radial direction of x
-        const dir = r > 1e-12 ? v3.mul(x, 1 / r) : ([0, 0, 1] as Vec3);
+        const dir = r > EPS ? v3.mul(x, 1 / r) : ([0, 0, 1] as Vec3);
         const delta = v3.mul(dir, edgeStep * err);
         V[i] = v3.add(V[i], delta);
         V[j] = v3.add(V[j], delta);

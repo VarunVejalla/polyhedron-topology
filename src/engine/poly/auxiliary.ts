@@ -2,9 +2,10 @@ import type { Vec3 } from "../math/types";
 import type { FaceEdgeIncidence, PlaneEq, PolyAuxState, PolyRichState, PolyState, PolyTopologyData } from "./types";
 import { buildPolyTopology } from "./topology";
 import { v3 } from "../math/vec3";
+import { EPS } from "../math/constants";
 
 function normalizePlane(plane: PlaneEq): PlaneEq {
-  const inv = 1 / Math.max(1e-12, v3.norm(plane.n));
+  const inv = 1 / Math.max(EPS, v3.norm(plane.n));
   return { n: v3.mul(plane.n, inv), b: plane.b * inv };
 }
 
@@ -65,7 +66,7 @@ export function buildPolyAuxState(
     signedIncidenceArea[fi] = incArea;
 
     const denom = 6 * A;
-    if (Math.abs(denom) <= 1e-12) {
+    if (Math.abs(denom) <= EPS) {
       faceCentroid[fi] = averageVertices(state.vertices, state.faces[fi]);
     } else {
       let s: Vec3 = [0, 0, 0];
@@ -84,7 +85,7 @@ export function buildPolyAuxState(
   for (let fi = 0; fi < facePyramidVolume.length; fi++) volume += facePyramidVolume[fi];
 
   let centerOfMass: Vec3 = averageVertices(state.vertices);
-  if (Math.abs(volume) > 1e-12) {
+  if (Math.abs(volume) > EPS) {
     let s: Vec3 = [0, 0, 0];
     for (let fi = 0; fi < state.faces.length; fi++) {
       const w = facePyramidVolume[fi];

@@ -1,5 +1,6 @@
 import type { Vec3 } from "../math/types";
 import { v3 } from "../math/vec3";
+import { PLANE_VARIABLE_REGULARIZATION } from "../math/constants";
 import { buildPolyState } from "../poly";
 import { buildPolyTopology } from "../poly/topology";
 import type {
@@ -329,6 +330,6 @@ export function buildHandleMetricQuadratic(args: {
     c += w * (target[0] * target[0] + target[1] * target[1] + target[2] * target[2]);
   }
 
-  for (let i = 3 * args.vertexCount; i < args.dim; i++) A[i][i] += 1e-3;
+  for (let i = 3 * args.vertexCount; i < args.dim; i++) A[i][i] += PLANE_VARIABLE_REGULARIZATION;
   return { A, b, c };
 }

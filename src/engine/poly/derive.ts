@@ -1,5 +1,6 @@
 import type { Vec3 } from "../math/types";
 import { v3 } from "../math/vec3";
+import { EPS, POLYGON_INSIDE_EPS } from "../math/constants";
 import { buildPolyRichState } from "./auxiliary";
 import type { PolyDerivedCache, PolyRichState, PolyState, RollStep } from "./types";
 
@@ -64,7 +65,7 @@ function polygonMargin(
     const a = vertices[face[i]];
     const b = vertices[face[(i + 1) % face.length]];
     const s = v3.dot(v3.cross(v3.sub(b, a), v3.sub(center, a)), n);
-    if (Math.abs(s) > 1e-12) {
+    if (Math.abs(s) > EPS) {
       orientSign = s >= 0 ? 1 : -1;
       break;
     }
@@ -76,7 +77,7 @@ function polygonMargin(
     const a = vertices[face[i]];
     const b = vertices[face[(i + 1) % face.length]];
     const edge = v3.sub(b, a);
-    const len = Math.max(1e-12, v3.norm(edge));
+    const len = Math.max(EPS, v3.norm(edge));
     const s = v3.dot(v3.cross(edge, v3.sub(q, a)), n) / len;
     const margin = s * orientSign;
     if (margin < minMargin) {
@@ -85,7 +86,7 @@ function polygonMargin(
     }
   }
 
-  return { margin: minMargin, inside: minMargin >= -1e-9, minEdgeIndex };
+  return { margin: minMargin, inside: minMargin >= -POLYGON_INSIDE_EPS, minEdgeIndex };
 }
 
 function buildFaceAdjacency(faces: ReadonlyArray<ReadonlyArray<number>>) {

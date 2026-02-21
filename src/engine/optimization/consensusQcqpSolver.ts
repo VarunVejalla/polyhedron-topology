@@ -1,6 +1,7 @@
 import { zeroQuadratic } from "./quadratic";
 import { projectQcqp1Paper, type Qcqp1Constraint } from "./qcqp1Paper";
 import type { IndexedQuadraticConstraint, OptimizationModel, QuadraticConstraint } from "./types";
+import { DEFAULT_DAMPING, MIN_RHO, SOLVER_FALLBACK_DIAG, SOLVER_PIVOT_EPS } from "../math/constants";
 
 type ConsensusQcqpParams = {
   rho: number;
@@ -58,7 +59,7 @@ function solveLinearSystem(Ain: ReadonlyArray<ReadonlyArray<number>>, bin: Reado
         pivot = i;
       }
     }
-    if (!(best > 1e-14)) return null;
+    if (!(best > SOLVER_PIVOT_EPS)) return null;
     if (pivot !== k) {
       const row = A[k];
       A[k] = A[pivot];
@@ -81,7 +82,7 @@ function solveLinearSystem(Ain: ReadonlyArray<ReadonlyArray<number>>, bin: Reado
     let rhs = b[i];
     for (let j = i + 1; j < n; j++) rhs -= (A[i][j] ?? 0) * x[j];
     const aii = A[i][i];
-    if (!(Math.abs(aii) > 1e-14)) return null;
+    if (!(Math.abs(aii) > SOLVER_PIVOT_EPS)) return null;
     x[i] = rhs / aii;
   }
   return x;
@@ -174,8 +175,8 @@ export class ConsensusQcqpSolver {
     this.model = args.model;
     this.dim = args.initialX.length;
     this.params = {
-      rho: Math.max(1e-8, args.rho),
-      damping: Math.max(0, args.damping ?? 1e-6),
+      rho: Math.max(MIN_RHO, args.rho),
+      damping: Math.max(0, args.damping ?? DEFAULT_DAMPING),
     };
     this.x = [...args.initialX];
     const constraints = collectIndexedConstraints(this.model, this.dim);
@@ -195,7 +196,7 @@ export class ConsensusQcqpSolver {
 
   setParams(next: Partial<ConsensusQcqpParams>): void {
     this.params = { ...this.params, ...next };
-    this.params.rho = Math.max(1e-8, this.params.rho);
+    this.params.rho = Math.max(MIN_RHO, this.params.rho);
     this.params.damping = Math.max(0, this.params.damping);
   }
 
@@ -250,7 +251,7 @@ export class ConsensusQcqpSolver {
       for (let i = 0; i < this.dim; i++) H[i][i] += this.params.damping;
       let xNew = solveLinearSystem(H, rhs);
       if (!xNew) {
-        for (let i = 0; i < this.dim; i++) H[i][i] += 1e-4;
+        for (let i = 0; i < this.dim; i++) H[i][i] += SOLVER_FALLBACK_DIAG;
         xNew = solveLinearSystem(H, rhs);
       }
       if (!xNew) break;

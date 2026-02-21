@@ -4,6 +4,20 @@ import type {
   OptimizationModel,
   QuadraticConstraint,
 } from "./types";
+import {
+  ACTIVE_SET_EPS,
+  ALM_DUAL_RELAXATION,
+  ALM_LAMBDA_CLIP,
+  ALM_MAX_BACKTRACKS,
+  ALM_MAX_STEP_NORM,
+  ALM_MIN_STEP_SCALE,
+  BACKTRACK_SHRINK,
+  EPS,
+  MIN_RHO,
+  PROXIMAL_WEIGHT_DEFAULT,
+  SOLVER_FALLBACK_DIAG,
+  SOLVER_PIVOT_EPS,
+} from "../math/constants";
 
 type AlmQuadraticParams = {
   rho: number;
@@ -69,7 +83,7 @@ function solveLinearSystem(Ain: ReadonlyArray<ReadonlyArray<number>>, bin: Reado
         pivot = i;
       }
     }
-    if (!(best > 1e-14)) return null;
+    if (!(best > SOLVER_PIVOT_EPS)) return null;
     if (pivot !== k) {
       const row = A[k];
       A[k] = A[pivot];
@@ -92,7 +106,7 @@ function solveLinearSystem(Ain: ReadonlyArray<ReadonlyArray<number>>, bin: Reado
     let rhs = b[i];
     for (let j = i + 1; j < n; j++) rhs -= (A[i][j] ?? 0) * x[j];
     const aii = A[i][i];
-    if (!(Math.abs(aii) > 1e-14)) return null;
+    if (!(Math.abs(aii) > SOLVER_PIVOT_EPS)) return null;
     x[i] = rhs / aii;
   }
   return x;
@@ -197,17 +211,17 @@ export class AlmQuadraticSolver {
     this.x = [...args.initialX];
     this.lambdaEq = new Array<number>(this.constraints.equalities.length).fill(0);
     this.lambdaIneq = new Array<number>(this.constraints.inequalities.length).fill(0);
-    this.rhoEq = new Array<number>(this.constraints.equalities.length).fill(Math.max(1e-8, args.rho));
-    this.rhoIneq = new Array<number>(this.constraints.inequalities.length).fill(Math.max(1e-8, args.rho));
+    this.rhoEq = new Array<number>(this.constraints.equalities.length).fill(Math.max(MIN_RHO, args.rho));
+    this.rhoIneq = new Array<number>(this.constraints.inequalities.length).fill(Math.max(MIN_RHO, args.rho));
     this.params = {
-      rho: Math.max(1e-8, args.rho),
-      proximalWeight: Math.max(0, args.proximalWeight ?? 1e-6),
-      activeSetEps: Math.max(0, args.activeSetEps ?? 1e-10),
-      maxStepNorm: 0.5,
-      minStepScale: 1 / 64,
-      maxBacktracks: 8,
-      dualRelaxation: 0.25,
-      lambdaClip: 1e6,
+      rho: Math.max(MIN_RHO, args.rho),
+      proximalWeight: Math.max(0, args.proximalWeight ?? PROXIMAL_WEIGHT_DEFAULT),
+      activeSetEps: Math.max(0, args.activeSetEps ?? ACTIVE_SET_EPS),
+      maxStepNorm: ALM_MAX_STEP_NORM,
+      minStepScale: ALM_MIN_STEP_SCALE,
+      maxBacktracks: ALM_MAX_BACKTRACKS,
+      dualRelaxation: ALM_DUAL_RELAXATION,
+      lambdaClip: ALM_LAMBDA_CLIP,
     };
   }
 
@@ -224,16 +238,16 @@ export class AlmQuadraticSolver {
 
   setParams(next: Partial<AlmQuadraticParams>): void {
     this.params = { ...this.params, ...next };
-    const rho = Math.max(1e-8, this.params.rho);
+    const rho = Math.max(MIN_RHO, this.params.rho);
     for (let i = 0; i < this.rhoEq.length; i++) this.rhoEq[i] = rho;
     for (let i = 0; i < this.rhoIneq.length; i++) this.rhoIneq[i] = rho;
     this.params.rho = rho;
     this.params.proximalWeight = Math.max(0, this.params.proximalWeight);
     this.params.activeSetEps = Math.max(0, this.params.activeSetEps);
-    this.params.maxStepNorm = Math.max(1e-8, this.params.maxStepNorm);
-    this.params.minStepScale = Math.min(1, Math.max(1e-8, this.params.minStepScale));
+    this.params.maxStepNorm = Math.max(MIN_RHO, this.params.maxStepNorm);
+    this.params.minStepScale = Math.min(1, Math.max(MIN_RHO, this.params.minStepScale));
     this.params.maxBacktracks = Math.max(0, Math.floor(this.params.maxBacktracks));
-    this.params.dualRelaxation = Math.min(1, Math.max(1e-8, this.params.dualRelaxation));
+    this.params.dualRelaxation = Math.min(1, Math.max(MIN_RHO, this.params.dualRelaxation));
     this.params.lambdaClip = Math.max(1, this.params.lambdaClip);
   }
 
@@ -297,14 +311,14 @@ export class AlmQuadraticSolver {
       const rhs = b.map((v) => -v);
       let d = solveLinearSystem(H, rhs);
       if (!d) {
-        for (let i = 0; i < this.dim; i++) H[i][i] += 1e-4;
+        for (let i = 0; i < this.dim; i++) H[i][i] += SOLVER_FALLBACK_DIAG;
         d = solveLinearSystem(H, rhs);
       }
       if (!d) break;
 
       let stepNorm = Math.sqrt(vecNorm2(d));
       if (stepNorm > this.params.maxStepNorm) {
-        const s = this.params.maxStepNorm / Math.max(1e-12, stepNorm);
+        const s = this.params.maxStepNorm / Math.max(EPS, stepNorm);
         for (let i = 0; i < this.dim; i++) d[i] *= s;
         stepNorm = this.params.maxStepNorm;
       }
@@ -320,7 +334,7 @@ export class AlmQuadraticSolver {
           accepted = true;
           break;
         }
-        scale *= 0.5;
+        scale *= BACKTRACK_SHRINK;
         if (scale < this.params.minStepScale) break;
       }
       if (!accepted) {

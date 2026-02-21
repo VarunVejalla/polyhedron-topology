@@ -2,6 +2,14 @@ import type { Plane } from "../math/plane";
 import type { Vec3 } from "../math/types";
 import { v3 } from "../math/vec3";
 import {
+  BBOX_MIN_SCALE,
+  CONVEX_HALFSPACE_EPS,
+  EPS,
+  INVERSE_DENOM_EPS_LOOSE,
+  LEGACY_STEP_CAP_RATIO,
+  MIN_RHO_LEGACY,
+} from "../math/constants";
+import {
   buildVertexIncidence,
   computePlanarityViolationFromPlanes,
   createPlanarFaceBuffers,
@@ -61,7 +69,7 @@ function bboxScale(points: ReadonlyArray<Vec3>): number {
   const dx = maxx - minx;
   const dy = maxy - miny;
   const dz = maxz - minz;
-  return Math.max(1e-6, Math.sqrt(dx * dx + dy * dy + dz * dz));
+  return Math.max(BBOX_MIN_SCALE, Math.sqrt(dx * dx + dy * dy + dz * dz));
 }
 
 function orientPlanesOutward(positions: ReadonlyArray<Vec3>, planes: ReadonlyArray<Plane>): Array<{ n: Vec3; b: number }> {
@@ -161,12 +169,12 @@ export class GuidedAlmLegacyProjector implements IProjector {
 
   step(iterations: number): void {
     if (iterations <= 0) return;
-    const rho = Math.max(1e-6, this.params.rho);
+    const rho = Math.max(MIN_RHO_LEGACY, this.params.rho);
     const wFree = Math.max(0, this.params.wFree);
     const wHandle = Math.max(0, this.params.wHandle);
     const convexPasses = this.flavor === "convex" ? 1 : 0;
-    const convexEps = 1e-6;
-    const stepCap = 0.2 * bboxScale(this.positions);
+    const convexEps = CONVEX_HALFSPACE_EPS;
+    const stepCap = LEGACY_STEP_CAP_RATIO * bboxScale(this.positions);
 
     for (let it = 0; it < iterations; it++) {
       for (let vi = 0; vi < this.positions.length; vi++) {
@@ -183,14 +191,14 @@ export class GuidedAlmLegacyProjector implements IProjector {
           sum = v3.add(sum, v3.sub(this.memory.z[vi], this.memory.q[vi]));
           denom += rho;
         }
-        const inv = 1 / Math.max(1e-10, denom);
+        const inv = 1 / Math.max(INVERSE_DENOM_EPS_LOOSE, denom);
         let next = v3.mul(v3.add(v3.mul(target, w), v3.mul(sum, rho)), inv);
 
         if (!Number.isFinite(next[0]) || !Number.isFinite(next[1]) || !Number.isFinite(next[2])) next = this.positions[vi];
 
         const delta = v3.sub(next, this.positions[vi]);
         const len = v3.norm(delta);
-        if (len > stepCap) next = v3.add(this.positions[vi], v3.mul(delta, stepCap / Math.max(1e-12, len)));
+        if (len > stepCap) next = v3.add(this.positions[vi], v3.mul(delta, stepCap / Math.max(EPS, len)));
         this.positions[vi] = next;
       }
 

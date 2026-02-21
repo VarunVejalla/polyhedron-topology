@@ -1,6 +1,7 @@
 import type { Plane } from "../math/plane";
 import type { Vec3 } from "../math/types";
 import { v3 } from "../math/vec3";
+import { CONVEX_HALFSPACE_EPS, INVERSE_DENOM_EPS, MIN_RHO } from "../math/constants";
 import { evaluateQuadratic, quadraticizeAt, zeroQuadratic } from "../optimization/quadratic";
 import { OptimizerSession } from "../optimization/session";
 import type {
@@ -149,11 +150,11 @@ function createZeroFunction(dim: number): ScalarFunction {
 const kernel: OptimizerKernel<PlanarState, ProjectorParams, PlanarMemory, PlanarModel> = {
   initialize: ({ model, state }) => createPlanarMemory(model, state),
   step: ({ model, state, params, memory, iterations }) => {
-    const rho = Math.max(1e-8, params.rho);
+    const rho = Math.max(MIN_RHO, params.rho);
     const wFree = Math.max(0, params.wFree);
     const wHandle = Math.max(0, params.wHandle);
     const convexPasses = Math.max(1, model.flavor === "convex" ? Math.floor(params.itersPerFrame) : 1);
-    const convexEps = 1e-6;
+    const convexEps = CONVEX_HALFSPACE_EPS;
 
     for (let it = 0; it < iterations; it++) {
       for (let vi = 0; vi < state.positions.length; vi++) {
@@ -172,7 +173,7 @@ const kernel: OptimizerKernel<PlanarState, ProjectorParams, PlanarMemory, Planar
           sum = v3.add(sum, v3.sub(memory.z[vi], memory.q[vi]));
           denom += rho;
         }
-        const inv = 1 / Math.max(1e-12, denom);
+        const inv = 1 / Math.max(INVERSE_DENOM_EPS, denom);
         state.positions[vi] = v3.mul(v3.add(v3.mul(target, w), v3.mul(sum, rho)), inv);
       }
 
