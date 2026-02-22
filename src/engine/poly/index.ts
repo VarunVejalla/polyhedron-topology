@@ -6,3 +6,4 @@ export type {
 
 export { buildPolyState } from "./state";
 export { buildPolyDerivedCache } from "./derive";
+export { computeSignedVolumeFromVerticesAndFaces } from "./volume";

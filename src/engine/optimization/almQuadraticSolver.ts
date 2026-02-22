@@ -41,6 +41,11 @@ type IndexedConstraintLists = {
   inequalities: IndexedQuadraticConstraint[];
 };
 
+type DualPenaltyState = {
+  lambda: number;
+  rho: number;
+};
+
 function matVec(A: ReadonlyArray<ReadonlyArray<number>>, x: ReadonlyArray<number>): number[] {
   const out = new Array<number>(x.length).fill(0);
   for (let i = 0; i < A.length; i++) {
@@ -138,6 +143,22 @@ function collectConstraints(model: OptimizationModel, dim: number): IndexedConst
   return { equalities, inequalities };
 }
 
+function collectLocalConstraints(model: OptimizationModel, x: ReadonlyArray<number>, dim: number): IndexedConstraintLists {
+  const equalities: IndexedQuadraticConstraint[] = [];
+  const inequalities: IndexedQuadraticConstraint[] = [];
+  const indexed = model.localIndexedQuadraticConstraints?.(x);
+  if (indexed) {
+    equalities.push(...indexed.equalities);
+    inequalities.push(...indexed.inequalities);
+  }
+  const local = model.localQuadraticConstraints?.(x);
+  if (local) {
+    for (let i = 0; i < local.equalities.length; i++) equalities.push(asIndexedConstraint(local.equalities[i], dim));
+    for (let i = 0; i < local.inequalities.length; i++) inequalities.push(asIndexedConstraint(local.inequalities[i], dim));
+  }
+  return { equalities, inequalities };
+}
+
 function evalIndexed(
   c: IndexedQuadraticConstraint,
   x: ReadonlyArray<number>
@@ -191,6 +212,8 @@ export class AlmQuadraticSolver {
   private readonly lambdaIneq: number[];
   private readonly rhoEq: number[];
   private readonly rhoIneq: number[];
+  private readonly localEqState = new Map<string, DualPenaltyState>();
+  private readonly localIneqState = new Map<string, DualPenaltyState>();
   private params: AlmQuadraticParams;
   private lastDiag: AlmQuadraticDiagnostics = {
     primalResidual: 0,
@@ -234,6 +257,8 @@ export class AlmQuadraticSolver {
     this.x = [...nextX];
     this.lambdaEq.fill(0);
     this.lambdaIneq.fill(0);
+    this.localEqState.clear();
+    this.localIneqState.clear();
     this.lastDiag = {
       primalResidual: 0,
       stepResidual: 0,
@@ -254,6 +279,8 @@ export class AlmQuadraticSolver {
     this.params.maxBacktracks = Math.max(0, Math.floor(this.params.maxBacktracks));
     this.params.dualRelaxation = Math.min(1, Math.max(MIN_RHO, this.params.dualRelaxation));
     this.params.lambdaClip = Math.max(1, this.params.lambdaClip);
+    for (const state of this.localEqState.values()) state.rho = rho;
+    for (const state of this.localIneqState.values()) state.rho = rho;
   }
 
   getStateRef(): ReadonlyArray<number> {
@@ -266,6 +293,14 @@ export class AlmQuadraticSolver {
 
   diagnostics(): AlmQuadraticDiagnostics {
     return this.lastDiag;
+  }
+
+  private getOrCreateLocalState(map: Map<string, DualPenaltyState>, id: string): DualPenaltyState {
+    const found = map.get(id);
+    if (found) return found;
+    const created = { lambda: 0, rho: this.params.rho };
+    map.set(id, created);
+    return created;
   }
 
   private merit(x: ReadonlyArray<number>): number {
@@ -281,12 +316,27 @@ export class AlmQuadraticSolver {
       const gp = Math.max(0, g);
       value += this.lambdaIneq[i] * g + 0.5 * this.rhoIneq[i] * gp * gp;
     }
+    const local = collectLocalConstraints(this.model, x, this.dim);
+    for (let i = 0; i < local.equalities.length; i++) {
+      const c = local.equalities[i];
+      const state = this.getOrCreateLocalState(this.localEqState, c.id);
+      const h = evalIndexed(c, x).value;
+      value += state.lambda * h + 0.5 * state.rho * h * h;
+    }
+    for (let i = 0; i < local.inequalities.length; i++) {
+      const c = local.inequalities[i];
+      const state = this.getOrCreateLocalState(this.localIneqState, c.id);
+      const g = evalIndexed(c, x).value;
+      const gp = Math.max(0, g);
+      value += state.lambda * g + 0.5 * state.rho * gp * gp;
+    }
     return value;
   }
 
   step(iterations: number): void {
     for (let it = 0; it < iterations; it++) {
       const xk = [...this.x];
+      const local = collectLocalConstraints(this.model, xk, this.dim);
       const baseMetric = this.model.localQuadraticMetric?.(xk) ?? zeroQuadratic(this.dim);
       const baseReg = this.model.localQuadraticRegularizer?.(xk) ?? zeroQuadratic(this.dim);
       const H = clone2D(baseMetric.A);
@@ -310,6 +360,20 @@ export class AlmQuadraticSolver {
         if (evalAt.value + this.lambdaIneq[i] / rho <= this.params.activeSetEps) continue;
         activeIneq++;
         accumulateQuadraticSpace(H, b, evalAt, this.lambdaIneq[i], rho);
+      }
+      for (let i = 0; i < local.equalities.length; i++) {
+        const c = local.equalities[i];
+        const state = this.getOrCreateLocalState(this.localEqState, c.id);
+        const evalAt = evalIndexed(c, xk);
+        accumulateQuadraticSpace(H, b, evalAt, state.lambda, state.rho);
+      }
+      for (let i = 0; i < local.inequalities.length; i++) {
+        const c = local.inequalities[i];
+        const state = this.getOrCreateLocalState(this.localIneqState, c.id);
+        const evalAt = evalIndexed(c, xk);
+        if (evalAt.value + state.lambda / state.rho <= this.params.activeSetEps) continue;
+        activeIneq++;
+        accumulateQuadraticSpace(H, b, evalAt, state.lambda, state.rho);
       }
 
       for (let i = 0; i < this.dim; i++) H[i][i] += this.params.proximalWeight;
@@ -364,6 +428,21 @@ export class AlmQuadraticSolver {
       for (let i = 0; i < this.constraints.inequalities.length; i++) {
         const g = evalIndexed(this.constraints.inequalities[i], this.x).value;
         this.lambdaIneq[i] = Math.max(0, Math.min(lambdaBound, this.lambdaIneq[i] + beta * this.rhoIneq[i] * g));
+        const gp = Math.max(0, g);
+        primal2 += gp * gp;
+      }
+      for (let i = 0; i < local.equalities.length; i++) {
+        const c = local.equalities[i];
+        const state = this.getOrCreateLocalState(this.localEqState, c.id);
+        const h = evalIndexed(c, this.x).value;
+        state.lambda = Math.max(-lambdaBound, Math.min(lambdaBound, state.lambda + beta * state.rho * h));
+        primal2 += h * h;
+      }
+      for (let i = 0; i < local.inequalities.length; i++) {
+        const c = local.inequalities[i];
+        const state = this.getOrCreateLocalState(this.localIneqState, c.id);
+        const g = evalIndexed(c, this.x).value;
+        state.lambda = Math.max(0, Math.min(lambdaBound, state.lambda + beta * state.rho * g));
         const gp = Math.max(0, g);
         primal2 += gp * gp;
       }

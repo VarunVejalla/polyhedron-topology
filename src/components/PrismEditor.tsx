@@ -32,6 +32,7 @@ type Props = {
     unitNormalityMetric: number;
     convexityViolation: number;
     isConvex: boolean;
+    volume: number;
   }) => void;
   onRunningChange?: (running: boolean) => void;
 };

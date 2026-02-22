@@ -65,6 +65,7 @@ export type OptimizationModel = {
   indexedQuadraticConstraints?: IndexedQuadraticConstraintSet;
   exactConstraints: FunctionConstraintSet;
   localQuadraticConstraints?: QuadraticProvider;
+  localIndexedQuadraticConstraints?: (x: ReadonlyArray<number>) => IndexedQuadraticConstraintSet;
   metric?: ScalarFunction;
   regularizer?: ScalarFunction;
   localQuadraticMetric?: QuadraticObjectiveProvider;

@@ -113,6 +113,18 @@ function collectIndexedConstraints(model: OptimizationModel, dim: number): Index
   return out;
 }
 
+function collectLocalIndexedConstraints(model: OptimizationModel, x: ReadonlyArray<number>, dim: number): IndexedQuadraticConstraint[] {
+  const out: IndexedQuadraticConstraint[] = [];
+  const indexed = model.localIndexedQuadraticConstraints?.(x);
+  if (indexed) out.push(...indexed.equalities, ...indexed.inequalities);
+  const local = model.localQuadraticConstraints?.(x);
+  if (local) {
+    for (let i = 0; i < local.equalities.length; i++) out.push(asIndexedConstraint(local.equalities[i], dim));
+    for (let i = 0; i < local.inequalities.length; i++) out.push(asIndexedConstraint(local.inequalities[i], dim));
+  }
+  return out;
+}
+
 function extractByIndices(x: ReadonlyArray<number>, indices: ReadonlyArray<number>): number[] {
   const out = new Array<number>(indices.length);
   for (let i = 0; i < indices.length; i++) out[i] = x[indices[i]];
@@ -159,7 +171,8 @@ export class ConsensusQcqpSolver {
   private readonly dim: number;
   private params: ConsensusQcqpParams;
   private x: number[];
-  private readonly blocks: ConstraintBlock[];
+  private readonly staticBlocks: ConstraintBlock[];
+  private readonly localBlocks = new Map<string, ConstraintBlock>();
   private diag: ConsensusQcqpDiagnostics = {
     primalResidual: 0,
     dualResidual: 0,
@@ -180,7 +193,7 @@ export class ConsensusQcqpSolver {
     };
     this.x = [...args.initialX];
     const constraints = collectIndexedConstraints(this.model, this.dim);
-    this.blocks = constraints.map((c) => {
+    this.staticBlocks = constraints.map((c) => {
       const z0 = extractByIndices(this.x, c.form.indices);
       return {
         id: c.id,
@@ -202,8 +215,8 @@ export class ConsensusQcqpSolver {
 
   resetState(nextX: number[]): void {
     this.x = [...nextX];
-    for (let i = 0; i < this.blocks.length; i++) {
-      const blk = this.blocks[i];
+    for (let i = 0; i < this.staticBlocks.length; i++) {
+      const blk = this.staticBlocks[i];
       const z0 = extractByIndices(this.x, blk.indices);
       for (let j = 0; j < z0.length; j++) {
         blk.z[j] = z0[j];
@@ -211,11 +224,49 @@ export class ConsensusQcqpSolver {
         blk.u[j] = 0;
       }
     }
+    this.localBlocks.clear();
     this.diag = {
       primalResidual: 0,
       dualResidual: 0,
       maxConstraintViolation: 0,
     };
+  }
+
+  private syncLocalBlocks(x: ReadonlyArray<number>): ConstraintBlock[] {
+    const out: ConstraintBlock[] = [];
+    const localConstraints = collectLocalIndexedConstraints(this.model, x, this.dim);
+    const seen = new Set<string>();
+    for (let i = 0; i < localConstraints.length; i++) {
+      const c = localConstraints[i];
+      const blockId = `local:${c.sense}:${c.id}`;
+      seen.add(blockId);
+      const xLocal = extractByIndices(x, c.form.indices);
+      let blk = this.localBlocks.get(blockId);
+      const sameShape =
+        blk &&
+        blk.indices.length === c.form.indices.length &&
+        blk.indices.every((idx, j) => idx === c.form.indices[j]);
+      if (!blk || !sameShape) {
+        blk = {
+          id: blockId,
+          sense: c.sense,
+          indices: [...c.form.indices],
+          z: [...xLocal],
+          zPrev: [...xLocal],
+          u: new Array<number>(xLocal.length).fill(0),
+          qcqp1: localToPaper(c),
+        };
+        this.localBlocks.set(blockId, blk);
+      } else {
+        blk.sense = c.sense;
+        blk.qcqp1 = localToPaper(c);
+      }
+      out.push(blk);
+    }
+    for (const key of this.localBlocks.keys()) {
+      if (!seen.has(key)) this.localBlocks.delete(key);
+    }
+    return out;
   }
 
   getStateRef(): ReadonlyArray<number> {
@@ -231,15 +282,17 @@ export class ConsensusQcqpSolver {
   }
 
   step(iterations: number): void {
-    if (iterations <= 0 || this.blocks.length === 0) return;
+    if (iterations <= 0) return;
     const rho = this.params.rho;
     for (let it = 0; it < iterations; it++) {
+      const blocks = [...this.staticBlocks, ...this.syncLocalBlocks(this.x)];
+      if (blocks.length === 0) return;
       const objective = combineObjective(this.model, this.x);
       const H = clone2D(objective.A);
       const rhs = objective.b.map((v) => -v);
 
-      for (let bi = 0; bi < this.blocks.length; bi++) {
-        const blk = this.blocks[bi];
+      for (let bi = 0; bi < blocks.length; bi++) {
+        const blk = blocks[bi];
         for (let li = 0; li < blk.indices.length; li++) {
           const gi = blk.indices[li];
           H[gi][gi] += rho;
@@ -260,8 +313,8 @@ export class ConsensusQcqpSolver {
       let primal2 = 0;
       let dual2 = 0;
       let maxViolation = 0;
-      for (let bi = 0; bi < this.blocks.length; bi++) {
-        const blk = this.blocks[bi];
+      for (let bi = 0; bi < blocks.length; bi++) {
+        const blk = blocks[bi];
         const xLocal = extractByIndices(this.x, blk.indices);
         const zeta = new Array<number>(xLocal.length);
         for (let i = 0; i < xLocal.length; i++) zeta[i] = xLocal[i] - blk.u[i];

@@ -46,7 +46,7 @@ type MetricBuilder = (args: {
 }) => QuadraticForm;
 
 type PolyQcqpBuildOptions = {
-  includeNondegeneracy?: boolean;
+  volumeTarget?: number;
 };
 
 type PolyQcqpLayout = {
@@ -130,41 +130,116 @@ function nonIncIneqConstraint(layout: PolyQcqpLayout, fi: number, vi: number): I
   return { id: `noninc_ineq:${fi}:${vi}`, sense: "le", form: { indices, A, b, c: 0 } };
 }
 
-function meanCoordinateConstraint(layout: PolyQcqpLayout, axis: 0 | 1 | 2): IndexedQuadraticConstraint {
-  const indices = new Array<number>(layout.vertexCount);
-  const b = new Array<number>(layout.vertexCount).fill(1);
-  for (let vi = 0; vi < layout.vertexCount; vi++) indices[vi] = layout.idxVertex(vi) + axis;
-  return {
-    id: `mean:${axis}`,
-    sense: "eq",
-    form: {
-      indices,
-      A: zeroMat(layout.vertexCount),
-      b,
-      c: 0,
-    },
-  };
+function skew(v: Vec3): number[][] {
+  return [
+    [0, -v[2], v[1]],
+    [v[2], 0, -v[0]],
+    [-v[1], v[0], 0],
+  ];
 }
 
-function vertexNormConstraint(layout: PolyQcqpLayout): IndexedQuadraticConstraint {
-  const indices = new Array<number>(3 * layout.vertexCount);
-  for (let vi = 0; vi < layout.vertexCount; vi++) {
-    const b = layout.idxVertex(vi);
-    indices[3 * vi] = b;
-    indices[3 * vi + 1] = b + 1;
-    indices[3 * vi + 2] = b + 2;
+function addScaledMat3(dst: number[][], rowBase: number, colBase: number, scale: number, block: number[][]): void {
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < 3; c++) {
+      dst[rowBase + r][colBase + c] += scale * block[r][c];
+    }
   }
-  const A = zeroMat(indices.length);
-  for (let i = 0; i < indices.length; i++) A[i][i] = 2;
+}
+
+function addVec3(dst: number[], base: number, v: Vec3, scale = 1): void {
+  dst[base] += scale * v[0];
+  dst[base + 1] += scale * v[1];
+  dst[base + 2] += scale * v[2];
+}
+
+function vec3At(y: ReadonlyArray<number>, base: number): Vec3 {
+  return [y[base], y[base + 1], y[base + 2]];
+}
+
+function dot(a: ReadonlyArray<number>, b: ReadonlyArray<number>): number {
+  let s = 0;
+  for (let i = 0; i < a.length; i++) s += a[i] * b[i];
+  return s;
+}
+
+function matVec(A: ReadonlyArray<ReadonlyArray<number>>, x: ReadonlyArray<number>): number[] {
+  const out = new Array<number>(x.length).fill(0);
+  for (let i = 0; i < A.length; i++) {
+    const row = A[i] ?? [];
+    let s = 0;
+    for (let j = 0; j < x.length; j++) s += (row[j] ?? 0) * x[j];
+    out[i] = s;
+  }
+  return out;
+}
+
+function buildLocalVolumeConstraint(layout: PolyQcqpLayout, y: ReadonlyArray<number>, volumeTarget: number): IndexedQuadraticConstraint {
+  const activeDim = 3 * layout.vertexCount + 4 * layout.faceCount;
+  const indices = Array.from({ length: activeDim }, (_, i) => i);
+  const x = y.slice(0, activeDim);
+  const H = zeroMat(activeDim);
+  const g = new Array<number>(activeDim).fill(0);
+  let volume = 0;
+
+  const weight = 1 / 6;
+  for (let fi = 0; fi < layout.faceCount; fi++) {
+    const fb = layout.idxFace(fi);
+    const n = vec3At(x, fb);
+    const b = x[fb + 3];
+    const face = layout.faces[fi];
+    for (let i = 0; i < face.length; i++) {
+      const ui = face[i];
+      const vi = face[(i + 1) % face.length];
+      const ub = layout.idxVertex(ui);
+      const vb = layout.idxVertex(vi);
+      const u = vec3At(x, ub);
+      const v = vec3At(x, vb);
+      const uxv = v3.cross(u, v);
+      const triple = v3.dot(n, uxv);
+      volume += weight * b * triple;
+
+      const gb = weight * triple;
+      const gn = v3.mul(uxv, weight * b);
+      const gu = v3.mul(v3.cross(v, n), weight * b);
+      const gv = v3.mul(v3.cross(n, u), weight * b);
+      g[fb + 3] += gb;
+      addVec3(g, fb, gn);
+      addVec3(g, ub, gu);
+      addVec3(g, vb, gv);
+
+      const b_n = v3.mul(uxv, weight);
+      for (let c = 0; c < 3; c++) {
+        H[fb + c][fb + 3] += b_n[c];
+        H[fb + 3][fb + c] += b_n[c];
+      }
+
+      const b_u = v3.mul(v3.cross(v, n), weight);
+      const b_v = v3.mul(v3.cross(n, u), weight);
+      for (let c = 0; c < 3; c++) {
+        H[ub + c][fb + 3] += b_u[c];
+        H[fb + 3][ub + c] += b_u[c];
+        H[vb + c][fb + 3] += b_v[c];
+        H[fb + 3][vb + c] += b_v[c];
+      }
+
+      addScaledMat3(H, fb, ub, -weight * b, skew(v));
+      addScaledMat3(H, ub, fb, weight * b, skew(v));
+      addScaledMat3(H, fb, vb, weight * b, skew(u));
+      addScaledMat3(H, vb, fb, -weight * b, skew(u));
+      addScaledMat3(H, ub, vb, -weight * b, skew(n));
+      addScaledMat3(H, vb, ub, weight * b, skew(n));
+    }
+  }
+
+  const f = volume - volumeTarget;
+  const Hx = matVec(H, x);
+  const bq = new Array<number>(activeDim).fill(0);
+  for (let i = 0; i < activeDim; i++) bq[i] = g[i] - Hx[i];
+  const c = f - dot(g, x) + 0.5 * dot(x, Hx);
   return {
-    id: "vertex_norm",
+    id: "volume_eq",
     sense: "eq",
-    form: {
-      indices,
-      A,
-      b: new Array<number>(indices.length).fill(0),
-      c: -layout.vertexCount,
-    },
+    form: { indices, A: H, b: bq, c },
   };
 }
 
@@ -234,20 +309,13 @@ export function createPolyQcqpLayout(facesArg: number[][], x0: ReadonlyArray<Vec
     metricBuilder: MetricBuilder,
     options?: PolyQcqpBuildOptions
   ): OptimizationModel => {
-    const includeNondegeneracy = options?.includeNondegeneracy ?? true;
+    const volumeTarget = options?.volumeTarget;
     const indexed: IndexedQuadraticConstraintSet = { equalities: [], inequalities: [] };
     for (let i = 0; i < topology.incidencePairs.length; i++) {
       const pair = topology.incidencePairs[i];
       indexed.equalities.push(incidenceConstraint(layout, pair.fi, pair.vi));
     }
     for (let fi = 0; fi < faceCount; fi++) indexed.equalities.push(unitNormalConstraint(layout, fi));
-    if (includeNondegeneracy) {
-      indexed.equalities.push(meanCoordinateConstraint(layout, 0));
-      indexed.equalities.push(meanCoordinateConstraint(layout, 1));
-      indexed.equalities.push(meanCoordinateConstraint(layout, 2));
-      indexed.equalities.push(vertexNormConstraint(layout));
-    }
-
     if (flavor === "convex") {
       if (convexEncoding === "slack") {
         for (let di = 0; di < nonIncidenceCount; di++) {
@@ -266,6 +334,13 @@ export function createPolyQcqpLayout(facesArg: number[][], x0: ReadonlyArray<Vec
       quadraticConstraints: emptyQuadraticConstraints,
       indexedQuadraticConstraints: indexed,
       exactConstraints: emptyFunctionConstraints,
+      localIndexedQuadraticConstraints:
+        Number.isFinite(volumeTarget)
+          ? (x) => ({
+              equalities: [buildLocalVolumeConstraint(layout, x, volumeTarget as number)],
+              inequalities: [],
+            })
+          : undefined,
       localQuadraticMetric: () => metricBuilder({
         dim: yDim(flavor, convexEncoding),
         vertexCount,

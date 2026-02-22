@@ -17,6 +17,7 @@ export function usePolyhedronInteraction(
     unitNormalityMetric: number;
     convexityViolation: number;
     isConvex: boolean;
+    volume: number;
   }) => void,
   onRunningChange?: (running: boolean) => void
 ) {
@@ -66,7 +67,7 @@ export function usePolyhedronInteraction(
   const pushStatus = (
     diag: { totalPlanarityViolation: number },
     handleCount: number,
-    extra: { unitNormalityMetric: number; convexityViolation: number; isConvex: boolean }
+    extra: { unitNormalityMetric: number; convexityViolation: number; isConvex: boolean; volume: number }
   ) => {
     stateRef.current.onStatus?.({
       totalPlanarityViolation: diag.totalPlanarityViolation,
@@ -74,6 +75,7 @@ export function usePolyhedronInteraction(
       unitNormalityMetric: extra.unitNormalityMetric,
       convexityViolation: extra.convexityViolation,
       isConvex: extra.isConvex,
+      volume: extra.volume,
     });
   };
 
@@ -113,6 +115,7 @@ export function usePolyhedronInteraction(
         unitNormalityMetric: derived.unitNormalityMetric,
         convexityViolation: derived.convexityViolation,
         isConvex: derived.isConvex,
+        volume: derived.volume,
       });
     };
 

@@ -22,6 +22,7 @@ export default function App() {
   const [convexityViolation, setConvexityViolation] = useState(0);
   const [isConvexNow, setIsConvexNow] = useState(true);
   const [handleCount, setHandleCount] = useState(0);
+  const [currentVolume, setCurrentVolume] = useState(0);
   const [isComputing, setIsComputing] = useState(false);
   const prismRef = useRef<PrismEditorHandle | null>(null);
 
@@ -188,6 +189,7 @@ export default function App() {
           <div className="statusPill">Planarity: {planarity.toExponential(2)}</div>
           <div className="statusPill">Normality: {unitNormality.toExponential(2)}</div>
           <div className="statusPill">Convexity: {convexityViolation.toExponential(2)}</div>
+          <div className="statusPill">Volume: {currentVolume.toExponential(3)}</div>
           <div className={`statusPill ${isConvexNow ? "" : "statusBusy"}`}>{isConvexNow ? "Convex" : "Non-convex"}</div>
           <div className="statusPill">Handles: {handleCount}</div>
           <div className={`statusPill ${isComputing ? "statusBusy" : ""}`}>{isComputing ? "Running" : "Idle"}</div>
@@ -304,6 +306,7 @@ export default function App() {
                 setUnitNormality(s.unitNormalityMetric);
                 setConvexityViolation(s.convexityViolation);
                 setIsConvexNow(s.isConvex);
+                setCurrentVolume(s.volume);
               }}
               onRunningChange={setIsComputing}
             />

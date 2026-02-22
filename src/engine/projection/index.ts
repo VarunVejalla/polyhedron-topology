@@ -35,6 +35,8 @@ export type ProjectorParams = {
   rho: number;
   wFree: number;
   wHandle: number;
+  useVolumeConstraint?: boolean;
+  goalVolume?: number;
   itersPerFrame: number;
   itersOnRelease: number;
   qcqpDamping?: number;

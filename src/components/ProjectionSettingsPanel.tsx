@@ -48,6 +48,18 @@ export function ProjectionSettingsPanel({ value, showAdvanced, onPatch, onShowAd
           {visibleFields.map((field) => {
             const key = field.id;
             const current = value[key];
+            if (field.input === "boolean") {
+              return (
+                <label key={field.id} className="settingsToggle">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(current)}
+                    onChange={(e) => onPatch({ [key]: e.target.checked } as Partial<ProjectionSettings>)}
+                  />
+                  {field.label}
+                </label>
+              );
+            }
             if (field.input === "select") {
               return (
                 <label key={field.id} className="toolbarField">

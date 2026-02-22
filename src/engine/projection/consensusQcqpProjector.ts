@@ -2,6 +2,7 @@ import type { Vec3 } from "../math/types";
 import { DEFAULT_DAMPING, MIN_RHO } from "../math/constants";
 import { ConsensusQcqpSolver } from "../optimization/consensusQcqpSolver";
 import type { OptimizationModel } from "../optimization/types";
+import { computeSignedVolumeFromVerticesAndFaces } from "../poly";
 import {
   buildHandleMetricQuadratic,
   cloneVec3List,
@@ -38,6 +39,9 @@ export class ConsensusQcqpProjector implements IProjector {
     this.baseline = cloneVec3List(x0);
     this.positions = cloneVec3List(x0);
     this.params = { ...params };
+    const defaultTarget = computeSignedVolumeFromVerticesAndFaces(this.baseline, this.layout.faces);
+    const volumeTarget = this.params.goalVolume ?? defaultTarget;
+    const useVolumeConstraint = this.params.useVolumeConstraint ?? true;
     this.model = this.layout.buildModel(
       this.flavor,
       this.convexEncoding,
@@ -51,7 +55,7 @@ export class ConsensusQcqpProjector implements IProjector {
           wFree: Math.max(0, this.params.wFree),
           wHandle: Math.max(0, this.params.wHandle),
         }),
-      { includeNondegeneracy: false }
+      { volumeTarget: useVolumeConstraint ? volumeTarget : undefined }
     );
     this.solver = new ConsensusQcqpSolver({
       model: this.model,

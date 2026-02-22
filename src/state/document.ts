@@ -3,6 +3,7 @@ import { cloneGraph } from "../graph/core";
 import { buildVertexPresetGraph, presetNames } from "../graph/presets";
 import { GRAPH_VIEW } from "../graph/view";
 import { makeDefaultPrism, PRISM_FACES, type Vec3 } from "../engine/prismTopology";
+import { computeSignedVolumeFromVerticesAndFaces } from "../engine/poly";
 import { deriveDualPairFromVertexGraph } from "../graph/pipeline";
 import { createDefaultProjectionSettings, type ProjectionSettings } from "./projectionSettings";
 
@@ -77,6 +78,28 @@ function cloneFaces(f: number[][]): number[][] {
 function clonePoly(p: PolyDocument): PolyDocument {
   return { vertices: cloneVerts(p.vertices), faces: cloneFaces(p.faces) };
 }
+
+function sameFaces(a: ReadonlyArray<ReadonlyArray<number>>, b: ReadonlyArray<ReadonlyArray<number>>): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].length !== b[i].length) return false;
+    for (let j = 0; j < a[i].length; j++) if (a[i][j] !== b[i][j]) return false;
+  }
+  return true;
+}
+
+function withTopologyVolumeTarget(doc: Document, nextPoly: PolyDocument): Document {
+  const nextProjection = { ...doc.projection };
+  if (!sameFaces(doc.poly.faces, nextPoly.faces)) {
+    nextProjection.goalVolume = computeSignedVolumeFromVerticesAndFaces(nextPoly.vertices, nextPoly.faces);
+  }
+  return {
+    ...doc,
+    poly: clonePoly(nextPoly),
+    projection: nextProjection,
+  };
+}
+
 function cloneDoc(d: Document): Document {
   return {
     preset: d.preset,
@@ -90,6 +113,7 @@ function cloneDoc(d: Document): Document {
 
 export function createInitialState(): DocumentState {
   const initialPoly = makeDefaultPrism();
+  const initialVolume = computeSignedVolumeFromVerticesAndFaces(initialPoly.vertices, PRISM_FACES);
 
   const presets = presetNames();
   const preset = presets[0] ?? "Triangular prism";
@@ -102,7 +126,7 @@ export function createInitialState(): DocumentState {
     vertexGraph: pair?.vertexGraph ?? initialVertexGraph,
     faceGraph: pair?.faceGraph ?? initialVertexGraph,
     poly: { vertices: initialPoly.vertices, faces: PRISM_FACES },
-    projection: createDefaultProjectionSettings(),
+    projection: createDefaultProjectionSettings(initialVolume),
     ui: {
       leftWidth: 460,
       showGraphs: true,
@@ -183,16 +207,17 @@ export function documentReducer(state: DocumentState, action: DocumentAction): D
     }
 
     case "COMMIT_POLY": {
-      const next: Document = { ...cloneDoc(state.present), poly: clonePoly(action.poly) };
+      const next = withTopologyVolumeTarget(cloneDoc(state.present), action.poly);
       return commit(next);
     }
 
     case "COMMIT_BUILD": {
+      const base = cloneDoc(state.present);
+      const withPoly = action.patch.poly ? withTopologyVolumeTarget(base, action.patch.poly) : base;
       const next: Document = {
-        ...cloneDoc(state.present),
+        ...withPoly,
         ...(action.patch.vertexGraph ? { vertexGraph: cloneGraph(action.patch.vertexGraph) } : {}),
         ...(action.patch.faceGraph ? { faceGraph: cloneGraph(action.patch.faceGraph) } : {}),
-        ...(action.patch.poly ? { poly: clonePoly(action.patch.poly) } : {}),
       };
       return commit(next);
     }
