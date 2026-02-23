@@ -117,6 +117,18 @@ export function useThreePolyhedronScene(
     const orbit = new OrbitControls(camera, renderer.domElement);
     orbit.enableDamping = true;
     orbit.dampingFactor = 0.08;
+    orbit.enablePan = true;
+    orbit.screenSpacePanning = true;
+    (orbit as OrbitControls & { zoomToCursor?: boolean }).zoomToCursor = true;
+    orbit.mouseButtons = {
+      LEFT: THREE.MOUSE.ROTATE,
+      MIDDLE: THREE.MOUSE.DOLLY,
+      RIGHT: THREE.MOUSE.PAN,
+    };
+    orbit.touches = {
+      ONE: THREE.TOUCH.ROTATE,
+      TWO: THREE.TOUCH.DOLLY_PAN,
+    };
     orbit.target.copy(defaultTarget);
 
     const axes = new THREE.AxesHelper(1.25);
@@ -351,12 +363,41 @@ export function useThreePolyhedronScene(
 
     const raycaster = new THREE.Raycaster();
     const mouseNDC = new THREE.Vector2();
+    const zoomRaycaster = new THREE.Raycaster();
+    const zoomNDC = new THREE.Vector2();
+    const lastPointerPx = { x: Number.NaN, y: Number.NaN };
+
+    const getZoomPointerPx = (): { x: number; y: number } => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      const cx = Number.isFinite(lastPointerPx.x) ? lastPointerPx.x : rect.left + rect.width * 0.5;
+      const cy = Number.isFinite(lastPointerPx.y) ? lastPointerPx.y : rect.top + rect.height * 0.5;
+      return {
+        x: THREE.MathUtils.clamp(cx, rect.left, rect.right),
+        y: THREE.MathUtils.clamp(cy, rect.top, rect.bottom),
+      };
+    };
+
+    const cursorHitOnViewPlane = (pointerPx: { x: number; y: number }, planePoint: THREE.Vector3): THREE.Vector3 | null => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return null;
+      const x = (pointerPx.x - rect.left) / rect.width;
+      const y = (pointerPx.y - rect.top) / rect.height;
+      zoomNDC.set(2 * x - 1, 1 - 2 * y);
+      zoomRaycaster.setFromCamera(zoomNDC, camera);
+      const normal = new THREE.Vector3();
+      camera.getWorldDirection(normal);
+      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, planePoint);
+      const hit = new THREE.Vector3();
+      return zoomRaycaster.ray.intersectPlane(plane, hit) ? hit : null;
+    };
 
     const setMouseFromEvent = (e: PointerEvent) => {
       const rect = renderer.domElement.getBoundingClientRect();
       const x = (e.clientX - rect.left) / rect.width;
       const y = (e.clientY - rect.top) / rect.height;
       mouseNDC.set(2 * x - 1, 1 - 2 * y);
+      lastPointerPx.x = e.clientX;
+      lastPointerPx.y = e.clientY;
     };
 
     const computeFaceNormalAndPoint = (fi: number, baseline: ReadonlyArray<Vec3>): { normal: THREE.Vector3; point: THREE.Vector3 } | null => {
@@ -514,6 +555,12 @@ export function useThreePolyhedronScene(
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
     };
 
+    const onPointerMoveForZoomAnchor = (e: PointerEvent) => {
+      lastPointerPx.x = e.clientX;
+      lastPointerPx.y = e.clientY;
+    };
+    renderer.domElement.addEventListener("pointermove", onPointerMoveForZoomAnchor);
+
     const sceneApi: ThreeSceneAPI = {
       mountRef,
       renderer,
@@ -536,12 +583,21 @@ export function useThreePolyhedronScene(
       updateSpheresMaterial,
       zoomBy: (factor: number) => {
         if (!Number.isFinite(factor) || factor <= 0) return;
+        const pointerPx = getZoomPointerPx();
+        const targetBefore = orbit.target.clone();
+        const hitBefore = cursorHitOnViewPlane(pointerPx, targetBefore);
         const toCamera = camera.position.clone().sub(orbit.target);
         const dist = toCamera.length();
         if (dist <= 1e-9) return;
         const nextDist = THREE.MathUtils.clamp(dist * factor, 0.2, 120);
         toCamera.setLength(nextDist);
         camera.position.copy(orbit.target.clone().add(toCamera));
+        const hitAfter = hitBefore ? cursorHitOnViewPlane(pointerPx, targetBefore) : null;
+        if (hitBefore && hitAfter) {
+          const delta = hitBefore.sub(hitAfter);
+          camera.position.add(delta);
+          orbit.target.add(delta);
+        }
         camera.updateProjectionMatrix();
         orbit.update();
       },
@@ -572,6 +628,7 @@ export function useThreePolyhedronScene(
     setApi(sceneApi);
 
     return () => {
+      renderer.domElement.removeEventListener("pointermove", onPointerMoveForZoomAnchor);
       setApi(null);
       dispose();
     };

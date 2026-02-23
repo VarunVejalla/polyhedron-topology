@@ -215,13 +215,43 @@ export function usePolyhedronInteraction(
     let dragStartClientY = 0;
     let dragDidMove = false;
     let dragWasHandle = false;
+    let spacePanActive = false;
 
     const dragPlane = new THREE.Plane();
     const dragHit = new THREE.Vector3();
 
+    const updateLeftMouseMode = (pan: boolean) => {
+      orbit.mouseButtons = {
+        LEFT: pan ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE,
+        MIDDLE: THREE.MOUSE.DOLLY,
+        RIGHT: THREE.MOUSE.PAN,
+      };
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      spacePanActive = true;
+      updateLeftMouseMode(true);
+      if ((e.target as HTMLElement | null)?.tagName !== "INPUT") e.preventDefault();
+    };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      spacePanActive = false;
+      updateLeftMouseMode(false);
+      if ((e.target as HTMLElement | null)?.tagName !== "INPUT") e.preventDefault();
+    };
+
     const onPointerDown = (e: PointerEvent) => {
       if (runningRef.current) return;
-      if (e.button === 2) e.preventDefault();
+      const panOverride = spacePanActive || e.shiftKey;
+      updateLeftMouseMode(panOverride);
+      if (e.button === 2) {
+        e.preventDefault();
+        return;
+      }
+      if (e.button !== 0) return;
+      if (panOverride) return;
 
       setMouseFromEvent(e);
       raycaster.setFromCamera(mouseNDC, camera);
@@ -233,7 +263,7 @@ export function usePolyhedronInteraction(
       const vid = obj.userData.vertexIndex as number;
       const c = stateRef.current.controller;
 
-      if (e.button === 2) {
+      if (e.altKey) {
         c.clearHandle(vid);
         applyProjection(c.getParams().itersPerFrame);
         return;
@@ -296,6 +326,8 @@ export function usePolyhedronInteraction(
     renderer.domElement.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
 
     syncFromController();
 
@@ -307,6 +339,8 @@ export function usePolyhedronInteraction(
       renderer.domElement.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
     };
   }, [scene]);
 
