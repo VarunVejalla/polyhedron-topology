@@ -19,6 +19,7 @@ export type ProjectionSettings = {
   rho: number;
   wFree: number;
   wHandle: number;
+  useConvexConstraint: boolean;
   useVolumeConstraint: boolean;
   goalVolume: number;
   itersPerFrame: number;
@@ -59,15 +60,16 @@ export type ProjectionSettingField = {
   options?: Array<SettingOption<HardProjectMode>>;
 };
 
-const guidedAlmMethods: ProjectionMethod[] = ["guided_alm_planar", "guided_alm_convex"];
-const guidedAlmLegacyMethods: ProjectionMethod[] = ["guided_alm_legacy_planar", "guided_alm_legacy_convex"];
-const consensusQcqpMethods: ProjectionMethod[] = ["consensus_qcqp_planar", "consensus_qcqp_convex_direct"];
+const guidedAlmMethods: ProjectionMethod[] = ["guided_alm"];
+const guidedAlmLegacyMethods: ProjectionMethod[] = ["guided_alm_legacy"];
+const consensusQcqpMethods: ProjectionMethod[] = ["consensus_qcqp"];
 const volumeAwareMethods: ProjectionMethod[] = [...guidedAlmMethods, ...consensusQcqpMethods];
 
 export const projectionSettingFields: ProjectionSettingField[] = [
   { id: "rho", label: "rho", input: "number", min: 1e-12, step: "any" },
   { id: "wFree", label: "wFree", input: "number", min: 0, step: "any" },
   { id: "wHandle", label: "wHandle", input: "number", min: 0, step: "any" },
+  { id: "useConvexConstraint", label: "use convex constraint", input: "boolean" },
   { id: "useVolumeConstraint", label: "use volume constraint", input: "boolean", methods: volumeAwareMethods },
   { id: "goalVolume", label: "goal volume", input: "number", step: "any", methods: volumeAwareMethods },
   { id: "itersPerFrame", label: "iters/frame", input: "integer", min: 1, step: 1 },
@@ -165,7 +167,7 @@ export const projectionSettingFields: ProjectionSettingField[] = [
     min: 0,
     step: "any",
     advanced: true,
-    methods: ["convex", "guided_alm_legacy_convex"],
+    methods: ["planar", "guided_alm_legacy"],
   },
   {
     id: "legacyStepCapRatio",
@@ -180,10 +182,11 @@ export const projectionSettingFields: ProjectionSettingField[] = [
 
 export function createDefaultProjectionSettings(goalVolume = 1): ProjectionSettings {
   return {
-    method: "guided_alm_convex",
+    method: "guided_alm",
     rho: 10,
     wFree: 1,
     wHandle: 1e5,
+    useConvexConstraint: true,
     useVolumeConstraint: true,
     goalVolume,
     itersPerFrame: 10,
@@ -218,6 +221,7 @@ export function toProjectorParams(settings: ProjectionSettings): ProjectorParams
     rho: settings.rho,
     wFree: settings.wFree,
     wHandle: settings.wHandle,
+    useConvexConstraint: settings.useConvexConstraint,
     useVolumeConstraint: settings.useVolumeConstraint,
     goalVolume: settings.goalVolume,
     itersPerFrame: settings.itersPerFrame,

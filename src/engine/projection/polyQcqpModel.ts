@@ -47,6 +47,7 @@ type MetricBuilder = (args: {
 
 type PolyQcqpBuildOptions = {
   volumeTarget?: number;
+  volumeConstraintMode?: "quadratic" | "linearized";
 };
 
 type PolyQcqpLayout = {
@@ -173,11 +174,17 @@ function matVec(A: ReadonlyArray<ReadonlyArray<number>>, x: ReadonlyArray<number
   return out;
 }
 
-function buildLocalVolumeConstraint(layout: PolyQcqpLayout, y: ReadonlyArray<number>, volumeTarget: number): IndexedQuadraticConstraint {
+function buildLocalVolumeConstraint(
+  layout: PolyQcqpLayout,
+  y: ReadonlyArray<number>,
+  volumeTarget: number,
+  mode: "quadratic" | "linearized"
+): IndexedQuadraticConstraint {
   const activeDim = 3 * layout.vertexCount + 4 * layout.faceCount;
   const indices = Array.from({ length: activeDim }, (_, i) => i);
   const x = y.slice(0, activeDim);
-  const H = zeroMat(activeDim);
+  const includeHessian = mode === "quadratic";
+  const H = includeHessian ? zeroMat(activeDim) : Array.from({ length: activeDim }, () => new Array<number>(activeDim).fill(0));
   const g = new Array<number>(activeDim).fill(0);
   let volume = 0;
 
@@ -208,31 +215,33 @@ function buildLocalVolumeConstraint(layout: PolyQcqpLayout, y: ReadonlyArray<num
       addVec3(g, vb, gv);
 
       const b_n = v3.mul(uxv, weight);
-      for (let c = 0; c < 3; c++) {
-        H[fb + c][fb + 3] += b_n[c];
-        H[fb + 3][fb + c] += b_n[c];
-      }
+      if (includeHessian) {
+        for (let c = 0; c < 3; c++) {
+          H[fb + c][fb + 3] += b_n[c];
+          H[fb + 3][fb + c] += b_n[c];
+        }
 
-      const b_u = v3.mul(v3.cross(v, n), weight);
-      const b_v = v3.mul(v3.cross(n, u), weight);
-      for (let c = 0; c < 3; c++) {
-        H[ub + c][fb + 3] += b_u[c];
-        H[fb + 3][ub + c] += b_u[c];
-        H[vb + c][fb + 3] += b_v[c];
-        H[fb + 3][vb + c] += b_v[c];
-      }
+        const b_u = v3.mul(v3.cross(v, n), weight);
+        const b_v = v3.mul(v3.cross(n, u), weight);
+        for (let c = 0; c < 3; c++) {
+          H[ub + c][fb + 3] += b_u[c];
+          H[fb + 3][ub + c] += b_u[c];
+          H[vb + c][fb + 3] += b_v[c];
+          H[fb + 3][vb + c] += b_v[c];
+        }
 
-      addScaledMat3(H, fb, ub, -weight * b, skew(v));
-      addScaledMat3(H, ub, fb, weight * b, skew(v));
-      addScaledMat3(H, fb, vb, weight * b, skew(u));
-      addScaledMat3(H, vb, fb, -weight * b, skew(u));
-      addScaledMat3(H, ub, vb, -weight * b, skew(n));
-      addScaledMat3(H, vb, ub, weight * b, skew(n));
+        addScaledMat3(H, fb, ub, -weight * b, skew(v));
+        addScaledMat3(H, ub, fb, weight * b, skew(v));
+        addScaledMat3(H, fb, vb, weight * b, skew(u));
+        addScaledMat3(H, vb, fb, -weight * b, skew(u));
+        addScaledMat3(H, ub, vb, -weight * b, skew(n));
+        addScaledMat3(H, vb, ub, weight * b, skew(n));
+      }
     }
   }
 
   const f = volume - volumeTarget;
-  const Hx = matVec(H, x);
+  const Hx = includeHessian ? matVec(H, x) : new Array<number>(activeDim).fill(0);
   const bq = new Array<number>(activeDim).fill(0);
   for (let i = 0; i < activeDim; i++) bq[i] = g[i] - Hx[i];
   const c = f - dot(g, x) + 0.5 * dot(x, Hx);
@@ -310,6 +319,7 @@ export function createPolyQcqpLayout(facesArg: number[][], x0: ReadonlyArray<Vec
     options?: PolyQcqpBuildOptions
   ): OptimizationModel => {
     const volumeTarget = options?.volumeTarget;
+    const volumeConstraintMode = options?.volumeConstraintMode ?? "quadratic";
     const indexed: IndexedQuadraticConstraintSet = { equalities: [], inequalities: [] };
     for (let i = 0; i < topology.incidencePairs.length; i++) {
       const pair = topology.incidencePairs[i];
@@ -337,7 +347,7 @@ export function createPolyQcqpLayout(facesArg: number[][], x0: ReadonlyArray<Vec
       localIndexedQuadraticConstraints:
         Number.isFinite(volumeTarget)
           ? (x) => ({
-              equalities: [buildLocalVolumeConstraint(layout, x, volumeTarget as number)],
+              equalities: [buildLocalVolumeConstraint(layout, x, volumeTarget as number, volumeConstraintMode)],
               inequalities: [],
             })
           : undefined,

@@ -6,25 +6,17 @@ import { ConsensusQcqpProjector } from "./consensusQcqpProjector";
 
 export type ProjectionMethod =
   | "planar"
-  | "convex"
-  | "guided_alm_planar"
-  | "guided_alm_convex"
-  | "guided_alm_legacy_planar"
-  | "guided_alm_legacy_convex"
-  | "consensus_qcqp_planar"
-  | "consensus_qcqp_convex_direct";
+  | "guided_alm"
+  | "guided_alm_legacy"
+  | "consensus_qcqp";
 
 export type ProjectionFlavor = "planar" | "convex";
 
 export const projectionMethods: { id: ProjectionMethod; label: string }[] = [
-  { id: "planar", label: "Planar projection" },
-  { id: "convex", label: "Planar + convex projection" },
-  { id: "guided_alm_planar", label: "Guided ALM (quadratic planar)" },
-  { id: "guided_alm_convex", label: "Guided ALM (quadratic convex direct)" },
-  { id: "guided_alm_legacy_planar", label: "Guided ALM Legacy (planar)" },
-  { id: "guided_alm_legacy_convex", label: "Guided ALM Legacy (convex)" },
-  { id: "consensus_qcqp_planar", label: "Consensus QCQP (planar)" },
-  { id: "consensus_qcqp_convex_direct", label: "Consensus QCQP (convex direct)" },
+  { id: "planar", label: "Planar ADMM" },
+  { id: "guided_alm", label: "Guided ALM (quadratic)" },
+  { id: "guided_alm_legacy", label: "Guided ALM Legacy" },
+  { id: "consensus_qcqp", label: "Consensus QCQP" },
 ];
 
 export type HandleSet = {
@@ -35,6 +27,7 @@ export type ProjectorParams = {
   rho: number;
   wFree: number;
   wHandle: number;
+  useConvexConstraint?: boolean;
   useVolumeConstraint?: boolean;
   goalVolume?: number;
   itersPerFrame: number;
@@ -64,11 +57,9 @@ export interface IProjector {
 }
 
 export function createProjector(method: ProjectionMethod, faces: number[][], x0: Vec3[], params: ProjectorParams): IProjector {
-  if (method === "guided_alm_planar") return new GuidedAlmProjector(faces, x0, "planar", params);
-  if (method === "guided_alm_convex") return new GuidedAlmProjector(faces, x0, "convex", params);
-  if (method === "guided_alm_legacy_planar") return new GuidedAlmLegacyProjector(faces, x0, "planar", params);
-  if (method === "guided_alm_legacy_convex") return new GuidedAlmLegacyProjector(faces, x0, "convex", params);
-  if (method === "consensus_qcqp_planar") return new ConsensusQcqpProjector(faces, x0, "planar", params);
-  if (method === "consensus_qcqp_convex_direct") return new ConsensusQcqpProjector(faces, x0, "convex", params);
-  return new PlanarProjector(faces, x0, method === "convex" ? "convex" : "planar", params);
+  const flavor: ProjectionFlavor = params.useConvexConstraint ? "convex" : "planar";
+  if (method === "guided_alm") return new GuidedAlmProjector(faces, x0, flavor, params);
+  if (method === "guided_alm_legacy") return new GuidedAlmLegacyProjector(faces, x0, flavor, params);
+  if (method === "consensus_qcqp") return new ConsensusQcqpProjector(faces, x0, flavor, params);
+  return new PlanarProjector(faces, x0, flavor, params);
 }

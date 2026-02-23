@@ -55,7 +55,10 @@ export class ConsensusQcqpProjector implements IProjector {
           wFree: Math.max(0, this.params.wFree),
           wHandle: Math.max(0, this.params.wHandle),
         }),
-      { volumeTarget: useVolumeConstraint ? volumeTarget : undefined }
+      {
+        volumeTarget: useVolumeConstraint ? volumeTarget : undefined,
+        volumeConstraintMode: "linearized",
+      }
     );
     this.solver = new ConsensusQcqpSolver({
       model: this.model,
