@@ -208,6 +208,9 @@ export default function App() {
             {doc.ui.showAdvancedSettings ? "Hide settings" : "Settings"}
           </button>
         </div>
+        <div className="toolbarHint">
+          Camera: LMB rotate, RMB/Shift+Drag/Space+Drag pan, wheel or +/- zoom to cursor, double-click to center, Alt+click vertex clears handle.
+        </div>
       </div>
 
       {doc.ui.showAdvancedSettings && (

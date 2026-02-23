@@ -30,6 +30,13 @@
   align-items: center;
 }
 
+.toolbarHint {
+  width: 100%;
+  font-size: 12px;
+  color: #4a6078;
+  line-height: 1.2;
+}
+
 .toolbarField {
   display: flex;
   flex-direction: column;
