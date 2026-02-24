@@ -263,12 +263,6 @@ export function usePolyhedronInteraction(
       const vid = obj.userData.vertexIndex as number;
       const c = stateRef.current.controller;
 
-      if (e.altKey) {
-        c.clearHandle(vid);
-        applyProjection(c.getParams().itersPerFrame);
-        return;
-      }
-
       dragging = true;
       dragVertex = vid;
       dragStartClientX = e.clientX;

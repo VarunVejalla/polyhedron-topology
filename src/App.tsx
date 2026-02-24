@@ -209,7 +209,7 @@ export default function App() {
           </button>
         </div>
         <div className="toolbarHint">
-          Camera: LMB rotate, RMB/Shift+Drag/Space+Drag pan, wheel or +/- zoom to cursor, double-click to center, Alt+click vertex clears handle.
+          Camera: LMB rotate, RMB/Shift+Drag/Space+Drag pan, wheel or +/- zoom to cursor.
         </div>
       </div>
 
